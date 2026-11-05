@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Icono de Gestor API: llaves de código con una flecha de petición, sobre el mismo fondo azul que Gestor BBDD.
+       Fuente de icon.png e icon.ico (npm run icons). -->
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4a8bff"/>
+      <stop offset="1" stop-color="#1d48b8"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#fondo)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Llave izquierda y llave derecha. -->
+    <path d="M178 126 C134 126 134 150 134 196 C134 236 122 256 96 256 C122 256 134 276 134 316 C134 362 134 386 178 386"/>
+    <path d="M334 126 C378 126 378 150 378 196 C378 236 390 256 416 256 C390 256 378 276 378 316 C378 362 378 386 334 386"/>
+  </g>
+  <!-- Flecha: la petición que sale. -->
+  <path d="M200 256 H296" stroke="#dbe7ff" stroke-width="34" stroke-linecap="round"/>
+  <path d="M268 212 L314 256 L268 300" fill="none" stroke="#dbe7ff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
