@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ApiSummary, Endpoint, SecretStorageStatus } from '@shared/types'
-import { ApiDialog } from './components/ApiDialog'
+import { ApiDialog, type DialogTab } from './components/ApiDialog'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { EndpointDialog } from './components/EndpointDialog'
 import { EndpointView } from './components/EndpointView'
@@ -52,7 +52,7 @@ export function App() {
   const [filter, setFilter] = useState('')
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
-  const [editingApi, setEditingApi] = useState<ApiSummary | 'new' | null>(null)
+  const [editingApi, setEditingApi] = useState<{ api: ApiSummary | null; tab?: DialogTab } | null>(null)
   const [editingEndpoint, setEditingEndpoint] = useState<{ api: ApiSummary; endpoint: Endpoint | null } | null>(null)
   const [deleting, setDeleting] = useState<Deleting | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
@@ -160,7 +160,7 @@ export function App() {
         <div className="section-title">
           APIs
           <span className="section-actions">
-            <button className="icon" title="Nueva API" onClick={() => setEditingApi('new')}>
+            <button className="icon" title="Nueva API" onClick={() => setEditingApi({ api: null })}>
               ＋
             </button>
           </span>
@@ -189,7 +189,7 @@ export function App() {
                     <button className="icon" title="Nuevo endpoint" onClick={() => setEditingEndpoint({ api, endpoint: null })}>
                       <Icon name="plus" />
                     </button>
-                    <button className="icon" title="Editar API" onClick={() => setEditingApi(api)}>
+                    <button className="icon" title="Editar API" onClick={() => setEditingApi({ api })}>
                       <Icon name="edit" />
                     </button>
                     <button className="icon" title="Borrar API" onClick={() => setDeleting({ kind: 'api', api })}>
@@ -292,6 +292,8 @@ export function App() {
               endpoint={endpoint}
               active={tabId(t) === activeTabId}
               onEdit={() => setEditingEndpoint({ api, endpoint })}
+              onEditApi={(tab) => setEditingApi({ api, tab })}
+              onApiChanged={replaceApi}
             />
           )
         })}
@@ -303,7 +305,7 @@ export function App() {
               <>
                 <div>Guarda tus APIs con su autenticación y explica cada endpoint para que cualquiera pueda usarlo.</div>
                 <div className="note">Empieza añadiendo una API: su dirección base y cómo se identifica.</div>
-                <button className="primary" onClick={() => setEditingApi('new')}>
+                <button className="primary" onClick={() => setEditingApi({ api: null })}>
                   Nueva API
                 </button>
               </>
@@ -341,7 +343,8 @@ export function App() {
 
       {editingApi && (
         <ApiDialog
-          initial={editingApi === 'new' ? null : editingApi}
+          initial={editingApi.api}
+          initialTab={editingApi.tab}
           secretStatus={secretStatus}
           onClose={() => setEditingApi(null)}
           onSaved={(saved) => {

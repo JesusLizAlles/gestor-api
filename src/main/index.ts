@@ -1,9 +1,10 @@
 import { appendFile, mkdir, stat, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, Menu, safeStorage, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, net, safeStorage, screen, shell } from 'electron'
 import electronUpdater from 'electron-updater'
 import { UPDATE_STATE_EVENT } from '@shared/ipc'
 import { registerIpc } from './ipc'
+import { RequestRunner } from './requests'
 import { ApiStore } from './store/apis'
 import { SecretVault, type SecretCipher } from './store/secrets'
 import { placeWindow, WindowStateStore } from './store/window-state'
@@ -171,7 +172,10 @@ app.whenReady().then(() => {
     log: updaterLog
   })
 
-  registerIpc({ store, vault, updater, window: () => mainWindow })
+  // net.fetch usa la red de Chromium: respeta el proxy y los certificados del sistema, y no envía cookies.
+  const runner = new RequestRunner({ store, vault, fetch: (url, init) => net.fetch(url, init) })
+
+  registerIpc({ store, vault, updater, runner, window: () => mainWindow })
   const openWindow = () => {
     mainWindow = createWindow(windowState)
     mainWindow.on('closed', () => {

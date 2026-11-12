@@ -6,9 +6,11 @@ import {
   type Endpoint,
   type EndpointParam,
   type HttpMethod,
+  type NameValue,
   type ParamLocation,
   type ParamType
 } from '@shared/types'
+import { variableNames } from '@shared/template'
 import { joinUrl, pathParamNames, syncPathParams } from '@shared/url'
 import { BODY_LABEL, PARAM_IN_HELP, PARAM_IN_LABEL, PARAM_TYPE_LABEL } from '../lib/labels'
 import { Icon } from './Icon'
@@ -22,22 +24,38 @@ interface Props {
 }
 
 const WITH_BODY: HttpMethod[] = ['POST', 'PUT', 'PATCH']
+/** Métodos que normalmente solo leen: no piden confirmación por defecto. */
+const READ_ONLY: HttpMethod[] = ['GET', 'HEAD', 'OPTIONS']
 
 /** Alta y edición de un endpoint: qué hace, a qué ruta llama y qué datos pide. */
 export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
+  const defaults = api.endpointDefaults
+  // Con plantilla de cuerpo, la API espera cuerpo en todas las llamadas: GET no serviría.
+  const startMethod = initial?.method ?? defaults?.method ?? (api.bodyTemplate ? 'POST' : 'GET')
   const [name, setName] = useState(initial?.name ?? '')
-  const [method, setMethod] = useState<HttpMethod>(initial?.method ?? 'GET')
-  const [path, setPath] = useState(initial?.path ?? '/')
+  const [method, setMethod] = useState<HttpMethod>(startMethod)
+  const [path, setPath] = useState(initial?.path ?? defaults?.path ?? '/')
   const [group, setGroup] = useState(initial?.group ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [params, setParams] = useState<EndpointParam[]>(initial?.params ?? [])
-  const [bodyKind, setBodyKind] = useState<BodyKind>(initial?.body.kind ?? 'none')
+  const [bodyKind, setBodyKind] = useState<BodyKind>(
+    initial?.body.kind ?? (api.bodyTemplate || WITH_BODY.includes(startMethod) ? 'json' : 'none')
+  )
   const [bodyExample, setBodyExample] = useState(initial?.body.example ?? '')
   const [bodyDescription, setBodyDescription] = useState(initial?.body.description ?? '')
+  const [useTemplate, setUseTemplate] = useState(initial?.body.useTemplate !== false)
+  const [vars, setVars] = useState<NameValue[]>(initial?.vars ?? [])
+  const [modifies, setModifies] = useState(initial?.modifies ?? !READ_ONLY.includes(startMethod))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const groups = [...new Set(api.endpoints.map((e) => e.group).filter((g): g is string => !!g))]
+  const listVars = api.variables.filter((v) => v.options)
+  // Huecos de la plantilla que no son variables de la conexión: los tiene que rellenar cada endpoint.
+  const templateSlots = api.bodyTemplate
+    ? variableNames(api.bodyTemplate).filter((n) => n !== 'body' && !n.startsWith('$') && !api.variables.some((v) => v.name === n))
+    : []
+  const setVar = (index: number, patch: Partial<NameValue>) => setVars((list) => list.map((v, i) => (i === index ? { ...v, ...patch } : v)))
   const pathNames = pathParamNames(path)
 
   const changePath = (value: string) => {
@@ -49,6 +67,7 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
     setMethod(value)
     // Al pasar a un método que suele llevar cuerpo, se propone JSON; nunca se borra lo escrito.
     if (bodyKind === 'none' && WITH_BODY.includes(value) && !initial) setBodyKind('json')
+    if (!initial) setModifies(!READ_ONLY.includes(value))
   }
 
   const setParam = (index: number, patch: Partial<EndpointParam>) =>
@@ -72,9 +91,17 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
             ...p,
             description: clean(p.description ?? ''),
             example: clean(p.example ?? ''),
-            options: p.type === 'enum' ? (p.options ?? []).map((o) => o.trim()).filter((o) => o !== '') : undefined
+            options: p.type === 'enum' && !p.optionsFrom ? (p.options ?? []).map((o) => o.trim()).filter((o) => o !== '') : undefined,
+            optionsFrom: p.type === 'enum' ? p.optionsFrom : undefined
           })),
-        body: { kind: bodyKind, example: clean(bodyExample), description: clean(bodyDescription) }
+        body: {
+          kind: bodyKind,
+          example: clean(bodyExample),
+          description: clean(bodyDescription),
+          useTemplate: api.bodyTemplate && !useTemplate ? false : undefined
+        },
+        vars: vars.filter((v) => v.name.trim() !== ''),
+        modifies
       })
       // Sin id previo, el nuevo es el último de la lista.
       onSaved(saved, initial?.id ?? saved.endpoints.at(-1)!.id)
@@ -140,7 +167,10 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
 
           <h3 className="dialog-section">Datos que pide</h3>
           {params.length === 0 ? (
-            <p className="note">Sin parámetros. Los de la ruta (entre llaves, como {'{id}'}) se añaden solos.</p>
+            <p className="note">
+              Sin parámetros. Los de la ruta (entre llaves, como {'{id}'}) se añaden solos. Los del cuerpo usan puntos para anidar
+              (filters.hotel_id).
+            </p>
           ) : (
             <table className="param-edit">
               <thead>
@@ -163,6 +193,7 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
                         <input
                           aria-label="Nombre del parámetro"
                           className="mono-input"
+                          placeholder={p.in === 'body' ? 'filters.hotel_id' : ''}
                           value={p.name}
                           readOnly={fromPath}
                           title={fromPath ? 'Viene de la ruta: cámbialo allí' : undefined}
@@ -192,7 +223,22 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
                             </option>
                           ))}
                         </select>
-                        {p.type === 'enum' && (
+                        {p.type === 'enum' && listVars.length > 0 && (
+                          <select
+                            aria-label="De dónde salen los valores"
+                            className="enum-options"
+                            value={p.optionsFrom ?? ''}
+                            onChange={(e) => setParam(i, { optionsFrom: e.target.value || undefined })}
+                          >
+                            <option value="">Valores escritos aquí</option>
+                            {listVars.map((v) => (
+                              <option key={v.name} value={v.name}>
+                                Listado {`{{${v.name}}}`}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {p.type === 'enum' && !p.optionsFrom && (
                           <input
                             aria-label="Valores posibles"
                             className="enum-options"
@@ -213,7 +259,12 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
                         />
                       </td>
                       <td>
-                        <input aria-label="Ejemplo" value={p.example ?? ''} onChange={(e) => setParam(i, { example: e.target.value })} />
+                        <input
+                          aria-label="Ejemplo"
+                          placeholder="Admite {{variables}}"
+                          value={p.example ?? ''}
+                          onChange={(e) => setParam(i, { example: e.target.value })}
+                        />
                       </td>
                       <td>
                         <input
@@ -246,6 +297,12 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
           </button>
 
           <h3 className="dialog-section">Cuerpo de la petición</h3>
+          {api.bodyTemplate && (
+            <label className="check spaced">
+              <input type="checkbox" checked={useTemplate} onChange={(e) => setUseTemplate(e.target.checked)} />
+              Envolver en la plantilla de cuerpo de la API (el cuerpo de aquí va donde pone {'{{body}}'})
+            </label>
+          )}
           <div className="form-grid">
             <label htmlFor="ep-body-kind">Formato</label>
             <select id="ep-body-kind" value={bodyKind} onChange={(e) => setBodyKind(e.target.value as BodyKind)}>
@@ -274,6 +331,51 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
               </>
             )}
           </div>
+
+          <h3 className="dialog-section">Valores fijos</h3>
+          <p className="note">
+            Variables que solo valen para este endpoint: se usan como {'{{nombre}}'} igual que las de la API y mandan sobre ellas.
+            {templateSlots.length > 0 && (
+              <>
+                {' '}
+                La plantilla de cuerpo de la API espera:{' '}
+                {templateSlots.map((slot, i) => (
+                  <span key={slot}>
+                    {i > 0 && ', '}
+                    <code>{slot}</code>
+                  </span>
+                ))}
+                .
+              </>
+            )}
+          </p>
+          {vars.map((v, i) => (
+            <div className="header-row" key={i}>
+              <input aria-label="Nombre del valor fijo" className="mono-input" placeholder="resource" value={v.name} onChange={(e) => setVar(i, { name: e.target.value })} />
+              <input aria-label="Valor fijo" className="mono-input" placeholder="booking" value={v.value} onChange={(e) => setVar(i, { value: e.target.value })} />
+              <button className="icon" title="Quitar valor fijo" onClick={() => setVars((list) => list.filter((_, j) => j !== i))}>
+                <Icon name="minus" />
+              </button>
+            </div>
+          ))}
+          <div className="row">
+            <button className="link" onClick={() => setVars((list) => [...list, { name: '', value: '' }])}>
+              + Añadir valor fijo
+            </button>
+            {templateSlots
+              .filter((slot) => !vars.some((v) => v.name === slot))
+              .map((slot) => (
+                <button key={slot} className="link" onClick={() => setVars((list) => [...list, { name: slot, value: '' }])}>
+                  + {slot}
+                </button>
+              ))}
+          </div>
+
+          <h3 className="dialog-section">Seguridad</h3>
+          <label className="check">
+            <input type="checkbox" checked={modifies} onChange={(e) => setModifies(e.target.checked)} />
+            Modifica datos: pedir confirmación antes de enviar
+          </label>
 
           {error && <div className="notice error spaced">{error}</div>}
         </div>

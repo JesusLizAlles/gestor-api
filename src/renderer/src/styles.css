@@ -980,3 +980,263 @@ button.compact {
   color: var(--text-dim);
   text-align: center;
 }
+
+/* ---- Fase 1: variables, envío y respuesta ---- */
+
+input[type='radio'] {
+  width: auto;
+  height: auto;
+}
+input.narrow {
+  width: 90px;
+  flex: none;
+}
+textarea.invalid {
+  border-color: var(--danger);
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.row .spacer {
+  flex: 1;
+}
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  padding: 0 3px;
+  border-radius: 3px;
+  user-select: text;
+}
+.badge.warn {
+  background: rgba(224, 168, 74, 0.18);
+  color: var(--warn);
+  margin-left: 8px;
+  vertical-align: middle;
+  font-weight: normal;
+}
+.dialog-tab .badge {
+  margin-left: 6px;
+}
+.dialog-section.first {
+  margin-top: 0;
+}
+.builtin-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 16px;
+}
+
+/* Variables de la API */
+.var-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.var-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.var-head .var-name {
+  width: 180px;
+  flex: none;
+}
+.var-head > input:not(.var-name) {
+  flex: 1;
+  margin-left: 8px;
+}
+.var-head select {
+  width: auto;
+  margin-left: 4px;
+}
+.option-table th:first-child {
+  width: 56px;
+}
+.option-table td:nth-child(3) {
+  width: 40%;
+}
+.paste-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Barra de la petición */
+.request-bar .spacer {
+  flex: 1;
+}
+.request-bar .row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.env-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid currentColor;
+}
+.env-pill-dev {
+  color: var(--env-dev);
+}
+.env-pill-test {
+  color: var(--env-test);
+}
+.env-pill-prod {
+  color: #fff;
+  background: var(--env-prod);
+  border-color: var(--env-prod);
+}
+.request-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  user-select: text;
+}
+.request-line {
+  word-break: break-all;
+}
+.kv-list {
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 8px;
+  user-select: text;
+  word-break: break-all;
+}
+.code-block {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 8px;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.dialog .code-block {
+  max-height: 260px;
+}
+
+/* Respuesta */
+.response {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 6px;
+  padding: 12px;
+}
+.response.fail {
+  border-left-color: var(--danger);
+}
+.response-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.response-head .spacer {
+  flex: 1;
+}
+.status-pill {
+  font: 600 12px var(--mono);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.status-pill.ok {
+  background: rgba(95, 184, 101, 0.15);
+  color: var(--ok);
+}
+.status-pill.warn {
+  background: rgba(224, 168, 74, 0.15);
+  color: var(--warn);
+}
+.status-pill.fail {
+  background: rgba(229, 83, 75, 0.15);
+  color: #ffb3ae;
+}
+.verdict.ok {
+  color: var(--ok);
+}
+.verdict.fail {
+  color: var(--danger);
+}
+.response-tabs {
+  padding: 0;
+  align-items: center;
+}
+.response-tabs .spacer {
+  flex: 1;
+}
+.segmented {
+  display: flex;
+}
+.segmented button {
+  height: 22px;
+  font-size: 11px;
+  border-radius: 0;
+}
+.segmented button:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.segmented button:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+}
+.segmented button.active {
+  background: var(--bg-select);
+}
+
+/* Árbol JSON */
+.json-tree {
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 8px 8px 8px 20px;
+  max-height: 60vh;
+  overflow: auto;
+  user-select: text;
+}
+.json-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+}
+.json-toggle {
+  cursor: pointer;
+  position: relative;
+}
+.json-toggle:hover {
+  background: var(--bg-hover);
+}
+.json-toggle .twisty {
+  display: inline-block;
+  width: 12px;
+  margin-left: -12px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.json-key {
+  color: #c792ea;
+}
+.json-string {
+  color: #a5d6a7;
+}
+.json-number {
+  color: #79b8ff;
+}
+.json-bool,
+.json-null {
+  color: #e0a84a;
+}
+.json-summary {
+  color: var(--text-dim);
+  font-style: italic;
+  margin: 0 6px;
+}

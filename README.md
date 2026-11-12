@@ -9,28 +9,48 @@ Es un proyecto de código abierto con [licencia MIT](LICENSE).
 
 ## Qué hace ya
 
+Es un cliente genérico: no lleva nada específico de ninguna API, pero se configura para casi cualquiera, sea REST
+clásica o del estilo «una sola URL, todo por POST JSON».
+
 - **APIs** con nombre, URL base, entorno (desarrollo, pruebas, producción) y descripción.
 - **Autenticación**: sin autenticación, token Bearer, usuario y contraseña (Basic), clave de API (en una cabecera
-  o en la URL) y OAuth 2.0 *client credentials*. Las credenciales se cifran con el llavero del sistema
-  (KWallet/libsecret, Keychain, DPAPI); sin llavero, solo se guardan en memoria. Al cambiar de tipo se borran las que
-  ya no se usan.
-- **Cabeceras comunes** a todas las llamadas de una API.
+  o en la URL), OAuth 2.0 *client credentials* (pide y renueva el token solo) y **campos personalizados**: uno o
+  varios secretos con el nombre que pida la API, en una cabecera, en la URL o dentro del cuerpo JSON
+  (`access_token` y `access_token_secret`, por ejemplo). Las credenciales se cifran con el llavero del sistema
+  (KWallet/libsecret, Keychain, DPAPI); sin llavero, solo se guardan en memoria. Las que dejan de usarse se borran.
+- **Variables** `{{nombre}}` por API, utilizables en la URL, las cabeceras, el cuerpo y los ejemplos de los parámetros.
+  Una variable puede ser un **listado** de valores con nombre (los hoteles dados de alta: «Hotel Cozy» → `100002`): en
+  la ficha se elige por su nombre, sin memorizar códigos, y los parámetros pueden ofrecer ese listado. Hay variables
+  automáticas: `{{$hoy}}`, `{{$ayer}}`, `{{$manana}}`, `{{$ahora}}`, `{{$timestamp}}` y `{{$uuid}}`.
+- **Plantilla de cuerpo** por API para las que envuelven todas las llamadas en la misma estructura:
+  `{"resource": "{{resource}}", "task": "{{task}}", "data": {{body}}}`. Sin comillas, `{{body}}` recibe el cuerpo de
+  cada endpoint y las variables conservan su tipo (número, sí/no…); entre comillas, se envían como texto.
+- **Regla de respuesta** para las APIs que responden siempre 200: qué campo dice si fue bien (`status = success`) y de
+  dónde sale el mensaje.
+- **Cabeceras comunes**, tiempo de espera y método/ruta por defecto de los endpoints nuevos.
 - **Endpoints** con método, ruta, grupo (carpeta en el panel lateral) y una explicación de qué hacen.
-  - **Datos que pide**: nombre, dónde va (ruta, consulta o cabecera), tipo (texto, número, sí/no, fecha o lista de
-    valores), si es obligatorio, un ejemplo y qué significa.
+  - **Datos que pide**: nombre, dónde va (ruta, consulta, cabecera o **cuerpo**, con puntos para anidar:
+    `filters.hotel_id`), tipo (texto, número, sí/no, fecha o lista de valores), si es obligatorio, un ejemplo y qué
+    significa.
   - Los parámetros de ruta (`/reservas/{id}` o `/reservas/:id`) se añaden solos al escribir la ruta.
   - **Cuerpo**: JSON o formulario, con un ejemplo.
-- **Ficha del endpoint**: su explicación, un campo por cada dato (con selector para listas y sí/no, calendario para
-  fechas), el cuerpo editable y la URL final montada mientras se escribe, con aviso de lo obligatorio que falta.
+  - **Valores fijos** (`resource = booking`, `task = get`…) que rellenan la plantilla de cuerpo.
+  - **Modifica datos**: pide confirmación antes de enviar; en producción, reforzada y enseñando lo que sale.
+- **Ficha del endpoint**: su explicación, los listados de la API, un campo por cada dato, el cuerpo editable y la
+  petición montada mientras se escribe (con los secretos tapados), con aviso de lo que falta.
+- **Envío** (<kbd>Ctrl</kbd>+<kbd>Enter</kbd>) y cancelación. La respuesta muestra código, si fue bien según la regla,
+  tiempo, tamaño, cuerpo en árbol plegable o como texto, cabeceras y la petición tal como salió.
 - Panel lateral con buscador de endpoints, pestañas (<kbd>Ctrl</kbd>+<kbd>W</kbd> cierra,
   <kbd>Ctrl</kbd>+<kbd>Tab</kbd> cambia) y actualizaciones automáticas.
 
 ## Próximos pasos
 
-- Enviar la petición y ver la respuesta (estado, tiempo, cabeceras y cuerpo con visor de JSON).
-- Pedir y renovar el token OAuth 2.0.
-- Importar APIs desde OpenAPI/Swagger y colecciones de Postman; exportar e importar entre equipos.
-- Historial de llamadas.
+1. Carpetas anidadas de endpoints por temática dentro de cada API, con arrastrar y soltar.
+2. Endpoints de tipo **script**: JavaScript con editor de código, ejecutado aislado (sin Node ni disco) y con acceso
+   solo a `request()`, las variables y los datos del formulario. Para paginar, encadenar llamadas o transformar la
+   respuesta.
+3. Importar y exportar APIs en JSON (y después OpenAPI/Swagger y Postman).
+4. Historial de llamadas.
 
 ## Puesta en marcha
 
@@ -78,6 +98,7 @@ encuentren las versiones, el repositorio tiene que ser público.
 │ ipc.ts         valida cada llamada con zod               │ IPC  │ React                      │
 │ store/apis.ts  apis.json: APIs y endpoints               │◀────▶│ Sin acceso a Node ni red   │
 │ store/secrets  credenciales cifradas (safeStorage)       │      │ CSP: solo recursos propios │
+│ requests.ts    envía, cancela, OAuth, regla de respuesta │      │                            │
 │ updater.ts     electron-updater                          │      └────────────────────────────┘
 └──────────────────────────────────────────────────────────┘
 ```
@@ -91,8 +112,11 @@ encuentren las versiones, el repositorio tiene que ser público.
 | `tests` | Tests unitarios (Vitest). |
 | `e2e` | Prueba de humo de la app completa con Playwright. |
 
-Las llamadas a las APIs las hará el proceso principal, no el renderer: así no hay problemas de CORS, las
-credenciales no pasan nunca por la interfaz y la CSP del renderer sigue cerrada a la red.
+Las llamadas a las APIs las hace el proceso principal (`requests.ts`, con `net.fetch` de Electron: proxy y
+certificados del sistema, sin cookies), no el renderer: así no hay problemas de CORS, las credenciales no pasan nunca
+por la interfaz (la petición que se le devuelve lleva los secretos tapados) y la CSP del renderer sigue cerrada a la
+red. El montaje de la petición (`src/shared/request.ts`) es una función pura que comparten los dos procesos: la
+interfaz la usa para la vista previa con los secretos tapados y el proceso principal para enviar.
 
 Los datos de la app se guardan en `~/.config/Gestor API/`: `apis.json`, `secrets.json` y `window-state.json`, con
 permisos 0600.

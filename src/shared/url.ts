@@ -1,7 +1,7 @@
 import type { EndpointParam } from './types'
 
-/** Parámetros de ruta escritos como {id} o :id. */
-const PATH_PARAM = /\{([A-Za-z_][\w-]*)\}|:([A-Za-z_][\w-]*)/g
+/** Parámetros de ruta escritos como {id} o :id. Las {{variables}} de la conexión no cuentan. */
+const PATH_PARAM = /(?<!\{)\{([A-Za-z_][\w-]*)\}(?!\})|:([A-Za-z_][\w-]*)/g
 
 /** Nombres de los parámetros de una ruta, en orden y sin repetir: /hoteles/{hotel}/reservas/:id → [hotel, id]. */
 export function pathParamNames(path: string): string[] {

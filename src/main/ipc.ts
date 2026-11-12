@@ -4,13 +4,15 @@ import { channelName, type ApiChannel, type IpcEnvelope } from '@shared/ipc'
 import type { AppApi } from '@shared/types'
 import type { ApiStore } from './store/apis'
 import type { SecretVault } from './store/secrets'
+import type { RequestRunner } from './requests'
 import type { Updater } from './updater'
-import { endpointInputSchema, idSchema, saveApiSchema } from './validation'
+import { endpointInputSchema, idSchema, saveApiSchema, sendRequestSchema, setVariableSchema } from './validation'
 
 export interface IpcDeps {
   store: ApiStore
   vault: SecretVault
   updater: Updater
+  runner: RequestRunner
   window: () => BrowserWindow | null
 }
 
@@ -24,14 +26,24 @@ function errorMessage(err: unknown): string {
 }
 
 export function registerIpc(deps: IpcDeps): void {
-  const { store, vault, updater, window } = deps
+  const { store, vault, updater, runner, window } = deps
   const handlers: Handlers = {
     secretStorageStatus: () => vault.status(),
     listApis: () => store.list(),
-    saveApi: (input) => store.save(saveApiSchema.parse(input)),
-    deleteApi: (id) => store.delete(idSchema.parse(id)),
+    saveApi: async (input) => {
+      const saved = await store.save(saveApiSchema.parse(input))
+      runner.forget(saved.id)
+      return saved
+    },
+    deleteApi: async (id) => {
+      await store.delete(idSchema.parse(id))
+      runner.forget(id as string)
+    },
     saveEndpoint: (apiId, endpoint) => store.saveEndpoint(idSchema.parse(apiId), endpointInputSchema.parse(endpoint)),
     deleteEndpoint: (apiId, endpointId) => store.deleteEndpoint(idSchema.parse(apiId), idSchema.parse(endpointId)),
+    setVariable: (...args) => store.setVariable(...setVariableSchema.parse(args)),
+    sendRequest: (input) => runner.send(sendRequestSchema.parse(input)),
+    cancelRequest: async (runId) => runner.cancel(idSchema.parse(runId)),
     updaterState: async () => updater.get(),
     checkForUpdates: () => updater.check(true),
     downloadUpdate: () => updater.download(),

@@ -19,6 +19,7 @@ const apiInput = (overrides: Partial<ApiInput> = {}): ApiInput => ({
   environment: 'dev',
   auth: { type: 'bearer' },
   headers: [{ name: 'Accept-Language', value: 'es' }],
+  variables: [],
   ...overrides
 })
 

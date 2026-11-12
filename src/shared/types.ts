@@ -5,8 +5,14 @@ export type Environment = 'dev' | 'test' | 'prod'
 export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
 export type HttpMethod = (typeof HTTP_METHODS)[number]
 
-/** Secretos de una API: van cifrados al llavero del sistema, nunca a apis.json. */
-export type SecretKey = 'token' | 'password' | 'apiKey' | 'clientSecret'
+/** Métodos que no admiten cuerpo. */
+export const METHODS_WITHOUT_BODY: readonly HttpMethod[] = ['GET', 'HEAD']
+
+/**
+ * Secretos de una API: van cifrados al llavero del sistema, nunca a apis.json.
+ * `field:<nombre>` son los de la autenticación con campos personalizados.
+ */
+export type SecretKey = 'token' | 'password' | 'apiKey' | 'clientSecret' | `field:${string}`
 
 /** string = nuevo valor; null = borrar; ausente = no tocar. */
 export type SecretsPatch = Partial<Record<SecretKey, string | null>>
@@ -15,6 +21,15 @@ export interface SecretStorageStatus {
   /** true si los secretos se cifran con el llavero del sistema y se guardan en disco. */
   persistent: boolean
   backend: string
+}
+
+export type AuthFieldLocation = 'header' | 'query' | 'body'
+
+/** Un dato secreto que la API pide en cada llamada: access_token en el cuerpo, X-Tenant en una cabecera… */
+export interface AuthField {
+  /** Nombre de la cabecera o del parámetro; en el cuerpo admite puntos para anidar (auth.token). */
+  name: string
+  in: AuthFieldLocation
 }
 
 /**
@@ -31,16 +46,29 @@ export type AuthConfig =
   | { type: 'apiKey'; name: string; in: 'header' | 'query' }
   /** OAuth 2.0 «client credentials»: se pide un token a `tokenUrl`. Secreto: `clientSecret`. */
   | { type: 'oauth2'; tokenUrl: string; clientId: string; scope?: string }
+  /** Uno o varios secretos con nombre, cada uno en la cabecera, la URL o el cuerpo. Secretos: `field:<nombre>`. */
+  | { type: 'custom'; fields: AuthField[] }
 
 export type AuthType = AuthConfig['type']
 
-/** Secretos que usa cada tipo de autenticación. */
-export const AUTH_SECRETS: Record<AuthType, SecretKey[]> = {
-  none: [],
-  bearer: ['token'],
-  basic: ['password'],
-  apiKey: ['apiKey'],
-  oauth2: ['clientSecret']
+export const fieldSecret = (name: string): SecretKey => `field:${name}`
+
+/** Secretos que usa una configuración de autenticación. */
+export function authSecrets(auth: AuthConfig): SecretKey[] {
+  switch (auth.type) {
+    case 'none':
+      return []
+    case 'bearer':
+      return ['token']
+    case 'basic':
+      return ['password']
+    case 'apiKey':
+      return ['apiKey']
+    case 'oauth2':
+      return ['clientSecret']
+    case 'custom':
+      return [...new Set(auth.fields.map((f) => fieldSecret(f.name)))]
+  }
 }
 
 export interface HeaderEntry {
@@ -48,21 +76,56 @@ export interface HeaderEntry {
   value: string
 }
 
-export type ParamLocation = 'path' | 'query' | 'header'
+/** Par nombre = valor genérico (valores fijos de un endpoint). */
+export type NameValue = HeaderEntry
+
+export interface VariableOption {
+  /** Lo que se ve: «Hotel Punta Negra». */
+  label: string
+  /** Lo que se envía: 100001. */
+  value: string
+}
+
+/**
+ * Variable de la conexión: se usa como {{nombre}} en la URL, las cabeceras, el cuerpo y los parámetros.
+ * Con `options` es un listado: se elige un valor por su nombre (los hoteles dados de alta, por ejemplo).
+ */
+export interface ApiVariable {
+  name: string
+  description?: string
+  /** Valor actual; en un listado, el de la opción elegida. */
+  value: string
+  options?: VariableOption[]
+}
+
+/** Cómo saber si una llamada fue bien cuando la API responde siempre 200 y lo dice en el cuerpo. */
+export interface ResponseRule {
+  /** Ruta en el JSON de la respuesta: status, result.ok… */
+  successPath: string
+  /** Valor que indica éxito: success, true, 0… */
+  successValue: string
+  /** Ruta del mensaje que explica el resultado: message, error.description… */
+  messagePath?: string
+}
+
+export type ParamLocation = 'path' | 'query' | 'header' | 'body'
 export type ParamType = 'string' | 'number' | 'boolean' | 'date' | 'enum'
 
 /** Un dato que pide el endpoint, explicado para quien no sabe de APIs. */
 export interface EndpointParam {
+  /** Nombre; en el cuerpo admite puntos para anidar (filters.hotel_id). */
   name: string
   in: ParamLocation
   type: ParamType
   required: boolean
   /** Qué significa, en lenguaje llano. */
   description?: string
-  /** Valor de ejemplo; también es el valor inicial del formulario. */
+  /** Valor de ejemplo; también es el valor inicial del formulario. Admite {{variables}}. */
   example?: string
   /** Valores posibles cuando `type` es `enum`. */
   options?: string[]
+  /** En una lista: toma las opciones del listado de esta variable de la conexión. */
+  optionsFrom?: string
 }
 
 export type BodyKind = 'none' | 'json' | 'form'
@@ -70,8 +133,10 @@ export type BodyKind = 'none' | 'json' | 'form'
 export interface EndpointBody {
   kind: BodyKind
   description?: string
-  /** Cuerpo de ejemplo (JSON o clave=valor por línea). */
+  /** Cuerpo de ejemplo (JSON o clave=valor por línea). Admite {{variables}}. */
   example?: string
+  /** false = no se envuelve en la plantilla de cuerpo de la conexión. Por defecto, sí. */
+  useTemplate?: boolean
 }
 
 export interface Endpoint {
@@ -87,6 +152,10 @@ export interface Endpoint {
   description?: string
   params: EndpointParam[]
   body: EndpointBody
+  /** Valores fijos del endpoint: variables que solo valen aquí (resource = booking, task = get…). */
+  vars: NameValue[]
+  /** Cambia datos en el servidor: se pide confirmación antes de enviar. */
+  modifies?: boolean
 }
 
 export interface ApiConfig {
@@ -99,6 +168,17 @@ export interface ApiConfig {
   auth: AuthConfig
   /** Cabeceras que se envían en todas las llamadas. */
   headers: HeaderEntry[]
+  variables: ApiVariable[]
+  /**
+   * Plantilla JSON que envuelve el cuerpo de cada endpoint. {{body}} sin comillas marca dónde va el cuerpo;
+   * el resto de {{variables}} se sustituyen como en cualquier otro sitio.
+   */
+  bodyTemplate?: string
+  responseRule?: ResponseRule
+  /** Método y ruta con los que empiezan los endpoints nuevos. */
+  endpointDefaults?: { method: HttpMethod; path: string }
+  /** Tiempo máximo de espera de cada llamada (60 s si no se indica). */
+  timeoutSeconds?: number
   endpoints: Endpoint[]
 }
 
@@ -115,7 +195,54 @@ export interface SaveApiInput {
   secrets?: SecretsPatch
 }
 
-export type EndpointInput = Omit<Endpoint, 'id'> & { id?: string }
+export type EndpointInput = Omit<Endpoint, 'id' | 'vars'> & { id?: string; vars?: NameValue[] }
+
+/** Lo que se pide al proceso principal para hacer una llamada. */
+export interface SendRequestInput {
+  /** Identificador de esta ejecución, para poder cancelarla. */
+  runId: string
+  apiId: string
+  endpointId: string
+  /** Valores del formulario por `paramKey` (in:nombre). */
+  values: Record<string, string>
+  /** Cuerpo tal como está en el editor. */
+  body: string
+}
+
+/** La petición tal como salió, con los secretos tapados. */
+export interface RequestEcho {
+  method: HttpMethod
+  url: string
+  headers: HeaderEntry[]
+  body?: string
+}
+
+export interface HttpResponse {
+  status: number
+  statusText: string
+  headers: HeaderEntry[]
+  /** Cuerpo como texto (vacío si es binario). */
+  body: string
+  /** Tamaño real en bytes. */
+  size: number
+  /** El cuerpo se cortó por ser demasiado grande. */
+  truncated: boolean
+  binary: boolean
+  contentType?: string
+}
+
+export interface SendResult {
+  runId: string
+  request: RequestEcho
+  durationMs: number
+  /** Sin respuesta: error de red, tiempo agotado o cancelada. */
+  error?: string
+  response?: HttpResponse
+  /** Según el código HTTP y, si la API la tiene, su regla de respuesta. */
+  success: boolean
+  /** Mensaje de la API (regla de respuesta) o explicación del fallo. */
+  message?: string
+}
 
 export type UpdateStatus = 'unsupported' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
 
@@ -147,6 +274,10 @@ export interface AppApi {
   /** Crea (sin id) o sustituye un endpoint de la API. */
   saveEndpoint(apiId: string, endpoint: EndpointInput): Promise<ApiSummary>
   deleteEndpoint(apiId: string, endpointId: string): Promise<ApiSummary>
+  /** Cambia el valor actual de una variable (la opción elegida de un listado). */
+  setVariable(apiId: string, name: string, value: string): Promise<ApiSummary>
+  sendRequest(input: SendRequestInput): Promise<SendResult>
+  cancelRequest(runId: string): Promise<void>
   updaterState(): Promise<UpdateState>
   checkForUpdates(): Promise<UpdateState>
   downloadUpdate(): Promise<UpdateState>
