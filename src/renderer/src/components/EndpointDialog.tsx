@@ -10,8 +10,9 @@ import {
   type ParamLocation,
   type ParamType
 } from '@shared/types'
-import { variableNames } from '@shared/template'
+import { INLINE_HELP, variableNames } from '@shared/template'
 import { joinUrl, pathParamNames, syncPathParams } from '@shared/url'
+import { flattenFolders } from '@shared/folders'
 import { BODY_LABEL, PARAM_IN_HELP, PARAM_IN_LABEL, PARAM_TYPE_LABEL } from '../lib/labels'
 import { Icon } from './Icon'
 
@@ -19,6 +20,8 @@ interface Props {
   api: ApiSummary
   /** null = endpoint nuevo. */
   initial: Endpoint | null
+  /** Carpeta en la que se crea un endpoint nuevo. */
+  folderId?: string
   onClose: () => void
   onSaved: (api: ApiSummary, endpointId: string) => void
 }
@@ -28,14 +31,14 @@ const WITH_BODY: HttpMethod[] = ['POST', 'PUT', 'PATCH']
 const READ_ONLY: HttpMethod[] = ['GET', 'HEAD', 'OPTIONS']
 
 /** Alta y edición de un endpoint: qué hace, a qué ruta llama y qué datos pide. */
-export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
+export function EndpointDialog({ api, initial, folderId: startFolder, onClose, onSaved }: Props) {
   const defaults = api.endpointDefaults
   // Con plantilla de cuerpo, la API espera cuerpo en todas las llamadas: GET no serviría.
   const startMethod = initial?.method ?? defaults?.method ?? (api.bodyTemplate ? 'POST' : 'GET')
   const [name, setName] = useState(initial?.name ?? '')
   const [method, setMethod] = useState<HttpMethod>(startMethod)
   const [path, setPath] = useState(initial?.path ?? defaults?.path ?? '/')
-  const [group, setGroup] = useState(initial?.group ?? '')
+  const [folderId, setFolderId] = useState(initial ? (initial.folderId ?? '') : (startFolder ?? ''))
   const [description, setDescription] = useState(initial?.description ?? '')
   const [params, setParams] = useState<EndpointParam[]>(initial?.params ?? [])
   const [bodyKind, setBodyKind] = useState<BodyKind>(
@@ -49,7 +52,6 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const groups = [...new Set(api.endpoints.map((e) => e.group).filter((g): g is string => !!g))]
   const listVars = api.variables.filter((v) => v.options)
   // Huecos de la plantilla que no son variables de la conexión: los tiene que rellenar cada endpoint.
   const templateSlots = api.bodyTemplate
@@ -83,7 +85,7 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
         name,
         method,
         path,
-        group: clean(group),
+        folderId: folderId || undefined,
         description: clean(description),
         params: params
           .filter((p) => p.name.trim() !== '')
@@ -139,19 +141,16 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
             <span />
             <span className="note mono">{joinUrl(api.baseUrl, path)}</span>
 
-            <label htmlFor="ep-group">Grupo</label>
-            <input
-              id="ep-group"
-              list="ep-groups"
-              value={group}
-              placeholder="Opcional: carpeta en la que aparece (Reservas, Clientes…)"
-              onChange={(e) => setGroup(e.target.value)}
-            />
-            <datalist id="ep-groups">
-              {groups.map((g) => (
-                <option key={g} value={g} />
+            <label htmlFor="ep-folder">Carpeta</label>
+            <select id="ep-folder" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
+              <option value="">— Sin carpeta —</option>
+              {flattenFolders(api.folders).map(({ folder, depth }) => (
+                <option key={folder.id} value={folder.id}>
+                  {'\u00a0\u00a0\u00a0'.repeat(depth)}
+                  {folder.name}
+                </option>
               ))}
-            </datalist>
+            </select>
 
             <label htmlFor="ep-desc" className="top">
               Qué hace
@@ -328,6 +327,17 @@ export function EndpointDialog({ api, initial, onClose, onSaved }: Props) {
                   placeholder={bodyKind === 'json' ? '{\n  "hotel": "MEN",\n  "noches": 3\n}' : 'hotel=MEN\nnoches=3'}
                   onChange={(e) => setBodyExample(e.target.value)}
                 />
+                <span />
+                <div className="note">
+                  Para pedir un dato al llamar, escribe un hueco con tipo y la ficha mostrará su campo:{' '}
+                  {INLINE_HELP.map(([code, help], i) => (
+                    <span key={code}>
+                      {i > 0 && ' · '}
+                      <code>{code}</code> {help}
+                    </span>
+                  ))}
+                  . Entre comillas va como texto; sin comillas, como número o sí/no.
+                </div>
               </>
             )}
           </div>

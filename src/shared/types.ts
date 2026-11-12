@@ -146,8 +146,8 @@ export interface Endpoint {
   method: HttpMethod
   /** Ruta relativa a la URL base; los parámetros de ruta van entre llaves: /reservas/{id}. */
   path: string
-  /** Carpeta en la que se agrupa en el panel lateral. */
-  group?: string
+  /** Carpeta en la que está (sin carpeta = en la raíz de la API). */
+  folderId?: string
   /** Para qué sirve y cómo funciona. */
   description?: string
   params: EndpointParam[]
@@ -156,6 +156,14 @@ export interface Endpoint {
   vars: NameValue[]
   /** Cambia datos en el servidor: se pide confirmación antes de enviar. */
   modifies?: boolean
+}
+
+/** Carpeta de endpoints; se pueden anidar. El orden del listado es el orden en pantalla. */
+export interface Folder {
+  id: string
+  name: string
+  /** Carpeta que la contiene (sin ella = en la raíz de la API). */
+  parentId?: string
 }
 
 export interface ApiConfig {
@@ -179,6 +187,7 @@ export interface ApiConfig {
   endpointDefaults?: { method: HttpMethod; path: string }
   /** Tiempo máximo de espera de cada llamada (60 s si no se indica). */
   timeoutSeconds?: number
+  folders: Folder[]
   endpoints: Endpoint[]
 }
 
@@ -188,7 +197,24 @@ export interface ApiSummary extends ApiConfig {
 }
 
 /** Al crear, sin id; los endpoints se gestionan aparte y se conservan al editar. */
-export type ApiInput = Omit<ApiConfig, 'id' | 'endpoints'> & { id?: string }
+export type ApiInput = Omit<ApiConfig, 'id' | 'endpoints' | 'folders'> & { id?: string }
+
+/** Crear (sin id), renombrar o cambiar de sitio una carpeta. */
+export interface FolderInput {
+  id?: string
+  name: string
+  parentId?: string
+}
+
+/** Mover un endpoint o una carpeta (arrastrar y soltar). */
+export interface MoveInput {
+  kind: 'endpoint' | 'folder'
+  id: string
+  /** Carpeta de destino; null = raíz de la API. */
+  parentId: string | null
+  /** Posición entre sus hermanos del mismo tipo en el destino (sin contar el que se mueve); más allá del final = al final. */
+  index: number
+}
 
 export interface SaveApiInput {
   config: ApiInput
@@ -207,6 +233,8 @@ export interface SendRequestInput {
   values: Record<string, string>
   /** Cuerpo tal como está en el editor. */
   body: string
+  /** Valores de variables de la API solo para esta llamada (los usa el agente MCP). */
+  variables?: Record<string, string>
 }
 
 /** La petición tal como salió, con los secretos tapados. */
@@ -244,6 +272,94 @@ export interface SendResult {
   message?: string
 }
 
+export interface ExportConfigInput {
+  apiIds: string[]
+  /** Clave para cifrar las credenciales; null = exportar sin credenciales. */
+  passphrase: string | null
+}
+
+/** Lo que trae un fichero de configuración, antes de importarlo. */
+export interface ImportPreview {
+  /** Identifica el fichero leído para importConfig (el renderer no pasa rutas). */
+  token: string
+  fileName: string
+  exportedAt: string
+  /** Trae credenciales, cifradas con la clave de quien exportó. */
+  encrypted: boolean
+  apis: { id: string; name: string; baseUrl: string; environment: Environment; endpoints: number; exists: boolean }[]
+}
+
+export interface ImportConfigInput {
+  token: string
+  apiIds: string[]
+  /** null = importar sin credenciales. */
+  passphrase: string | null
+}
+
+export interface ImportResult {
+  added: number
+  updated: number
+  withSecrets: boolean
+}
+
+/**
+ * Qué puede hacer un agente MCP con una API:
+ * - off: no la ve;
+ * - read: solo los endpoints que no modifican datos;
+ * - confirm: también los que modifican, pero cada llamada la aprueba el usuario en la app;
+ * - write: todo sin preguntar (en producción se queda en confirm).
+ */
+export type McpAccess = 'off' | 'read' | 'confirm' | 'write'
+
+export interface McpSettings {
+  enabled: boolean
+  /** Puerto local (solo 127.0.0.1). */
+  port: number
+  /** Acceso por id de API; las que no aparecen, 'off'. */
+  access: Record<string, McpAccess>
+}
+
+export interface McpActivity {
+  id: string
+  /** ISO 8601. */
+  at: string
+  tool: string
+  api: string | null
+  /** Endpoint o parámetros resumidos. */
+  summary: string
+  outcome: 'ok' | 'error' | 'blocked' | 'rejected'
+  detail?: string
+  durationMs: number
+}
+
+export interface McpState {
+  settings: McpSettings
+  /** Token que deben enviar los clientes (Authorization: Bearer …). */
+  token: string
+  running: boolean
+  /** http://127.0.0.1:<puerto>/mcp cuando está en marcha. */
+  url: string | null
+  /** Por qué no arrancó (p. ej. puerto ocupado). */
+  error: string | null
+  /** Últimas llamadas del agente, de la más reciente a la más antigua. */
+  activity: McpActivity[]
+  logPath: string
+  /** Llamadas que esperan aprobación. */
+  pendingApprovals: string[]
+}
+
+/** Llamada de un agente que modifica datos y espera la aprobación del usuario. */
+export interface McpApprovalRequest {
+  id: string
+  apiName: string
+  environment: Environment
+  endpointName: string
+  /** La petición tal como saldría, con los secretos tapados. */
+  request: RequestEcho
+}
+
+export const DEFAULT_MCP_PORT = 47331
+
 export type UpdateStatus = 'unsupported' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
 
 export interface UpdateState {
@@ -274,10 +390,30 @@ export interface AppApi {
   /** Crea (sin id) o sustituye un endpoint de la API. */
   saveEndpoint(apiId: string, endpoint: EndpointInput): Promise<ApiSummary>
   deleteEndpoint(apiId: string, endpointId: string): Promise<ApiSummary>
+  saveFolder(apiId: string, folder: FolderInput): Promise<ApiSummary>
+  /** Borra la carpeta; lo que tenía dentro pasa a la carpeta de arriba. */
+  deleteFolder(apiId: string, folderId: string): Promise<ApiSummary>
+  moveItem(apiId: string, move: MoveInput): Promise<ApiSummary>
   /** Cambia el valor actual de una variable (la opción elegida de un listado). */
   setVariable(apiId: string, name: string, value: string): Promise<ApiSummary>
   sendRequest(input: SendRequestInput): Promise<SendResult>
   cancelRequest(runId: string): Promise<void>
+  /** Guarda las APIs elegidas en un fichero; devuelve su ruta (null si se cancela). */
+  exportConfig(input: ExportConfigInput): Promise<string | null>
+  /** Pide un fichero y enseña lo que trae; null si se cancela. */
+  previewImport(): Promise<ImportPreview | null>
+  importConfig(input: ImportConfigInput): Promise<ImportResult>
+  mcpState(): Promise<McpState>
+  /** Cambia la configuración del servidor MCP (lo arranca, lo para o lo reinicia si hace falta). */
+  mcpSaveSettings(settings: McpSettings): Promise<McpState>
+  mcpRegenerateToken(): Promise<McpState>
+  /** Guarda la extensión para Claude Desktop (.mcpb); devuelve su ruta (null si se cancela). */
+  mcpCreateExtension(): Promise<string | null>
+  /** Abre la última extensión guardada con Claude Desktop. */
+  mcpOpenExtension(): Promise<void>
+  mcpRespondApproval(id: string, approved: boolean): Promise<void>
+  onMcpState(listener: (state: McpState) => void): () => void
+  onMcpApproval(listener: (request: McpApprovalRequest) => void): () => void
   updaterState(): Promise<UpdateState>
   checkForUpdates(): Promise<UpdateState>
   downloadUpdate(): Promise<UpdateState>

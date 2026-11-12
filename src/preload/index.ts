@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { API_CHANNELS, channelName, UPDATE_STATE_EVENT, type IpcEnvelope } from '@shared/ipc'
-import type { AppApi, UpdateState } from '@shared/types'
+import { API_CHANNELS, channelName, MCP_APPROVAL_EVENT, MCP_STATE_EVENT, UPDATE_STATE_EVENT, type IpcEnvelope } from '@shared/ipc'
+import type { AppApi, McpApprovalRequest, McpState, UpdateState } from '@shared/types'
 
 /** Suscripción a un evento del proceso principal; devuelve la función para darse de baja. */
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -20,7 +20,9 @@ const api = {
       }
     ])
   ),
-  onUpdateState: (listener: (state: UpdateState) => void) => subscribe(UPDATE_STATE_EVENT, listener)
+  onUpdateState: (listener: (state: UpdateState) => void) => subscribe(UPDATE_STATE_EVENT, listener),
+  onMcpState: (listener: (state: McpState) => void) => subscribe(MCP_STATE_EVENT, listener),
+  onMcpApproval: (listener: (request: McpApprovalRequest) => void) => subscribe(MCP_APPROVAL_EVENT, listener)
 } as unknown as AppApi
 
 contextBridge.exposeInMainWorld('api', api)

@@ -100,11 +100,12 @@ export const apiInputSchema = z.object({
   timeoutSeconds: z.number().int().min(1).max(3600).optional()
 })
 
-const secretValue = z.string().max(20000).nullable().optional()
-const secretKey = z.string().regex(/^(token|password|apiKey|clientSecret|field:[^\s]{1,200})$/, 'Credencial desconocida')
+// Al pegar una credencial es fácil arrastrar un espacio o un salto de línea: nunca forman parte de ella.
+const secretValue = z.string().max(20000).transform((s) => s.trim()).nullable().optional()
+export const secretKeySchema = z.string().regex(/^(token|password|apiKey|clientSecret|field:[^\s]{1,200})$/, 'Credencial desconocida')
 export const saveApiSchema = z.object({
   config: apiInputSchema,
-  secrets: z.record(secretKey, secretValue).optional()
+  secrets: z.record(secretKeySchema, secretValue).optional()
 })
 
 const paramSchema = z.object({
@@ -123,7 +124,7 @@ export const endpointInputSchema = z.object({
   name: z.string().trim().min(1, 'El nombre es obligatorio').max(200),
   method: z.enum(HTTP_METHODS),
   path: z.string().trim().max(2000).regex(/^[^\s]*$/, 'La ruta no puede tener espacios'),
-  group: optionalText(200),
+  folderId: idSchema.optional(),
   description: optionalText(20000),
   params: z.array(paramSchema).max(200),
   body: z.object({
@@ -139,6 +140,19 @@ export const endpointInputSchema = z.object({
   modifies: z.boolean().optional()
 })
 
+export const folderInputSchema = z.object({
+  id: idSchema.optional(),
+  name: z.string().trim().min(1, 'La carpeta necesita un nombre').max(200),
+  parentId: idSchema.optional()
+})
+
+export const moveSchema = z.object({
+  kind: z.enum(['endpoint', 'folder']),
+  id: idSchema,
+  parentId: idSchema.nullable(),
+  index: z.number().int().min(0).max(100000)
+})
+
 export const setVariableSchema = z.tuple([idSchema, z.string().min(1).max(200), text(20000)])
 
 export const sendRequestSchema = z.object({
@@ -147,4 +161,25 @@ export const sendRequestSchema = z.object({
   endpointId: idSchema,
   values: z.record(z.string().max(300), z.string().max(200000)),
   body: z.string().max(5_000_000)
+})
+
+/** Una API completa tal como viene en un fichero exportado (con sus ids, carpetas y endpoints). */
+export const importedApiSchema = apiInputSchema.extend({
+  id: idSchema,
+  folders: z
+    .array(z.object({ id: idSchema, name: z.string().trim().min(1).max(200), parentId: idSchema.optional() }))
+    .max(5000)
+    .default([]),
+  endpoints: z.array(endpointInputSchema.extend({ id: idSchema })).max(10000)
+})
+
+export const exportConfigSchema = z.object({
+  apiIds: z.array(idSchema).min(1).max(1000),
+  passphrase: z.string().max(1000).nullable()
+})
+
+export const importConfigSchema = z.object({
+  token: idSchema,
+  apiIds: z.array(idSchema).min(1).max(1000),
+  passphrase: z.string().max(1000).nullable()
 })

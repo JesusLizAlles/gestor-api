@@ -22,6 +22,13 @@ const PATHS = {
   ),
   /** Carpeta: grupo de endpoints. */
   folder: <path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-7.5Z" />,
+  /** Carpeta con un más: nueva carpeta. */
+  folderPlus: (
+    <>
+      <path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-7.5Z" />
+      <path d="M8 7.25v3.5M6.25 9h3.5" />
+    </>
+  ),
   /** Engranaje: ajustes. */
   settings: (
     <>

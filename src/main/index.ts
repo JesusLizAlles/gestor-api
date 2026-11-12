@@ -2,8 +2,10 @@ import { appendFile, mkdir, stat, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, Menu, net, safeStorage, screen, shell } from 'electron'
 import electronUpdater from 'electron-updater'
-import { UPDATE_STATE_EVENT } from '@shared/ipc'
+import { MCP_APPROVAL_EVENT, MCP_STATE_EVENT, UPDATE_STATE_EVENT } from '@shared/ipc'
 import { registerIpc } from './ipc'
+import { McpService } from './mcp/service'
+import { McpSettingsStore } from './mcp/settings'
 import { RequestRunner } from './requests'
 import { ApiStore } from './store/apis'
 import { SecretVault, type SecretCipher } from './store/secrets'
@@ -175,7 +177,29 @@ app.whenReady().then(() => {
   // net.fetch usa la red de Chromium: respeta el proxy y los certificados del sistema, y no envía cookies.
   const runner = new RequestRunner({ store, vault, fetch: (url, init) => net.fetch(url, init) })
 
-  registerIpc({ store, vault, updater, runner, window: () => mainWindow })
+  const mcpSettings = new McpSettingsStore(dataDir)
+  const mcp = new McpService({
+    settings: mcpSettings,
+    apis: store,
+    runner,
+    version: app.getVersion(),
+    logPath: join(app.getPath('logs'), 'mcp.log'),
+    onState: (state) => mainWindow?.webContents.send(MCP_STATE_EVENT, state),
+    onApproval: (request) => {
+      const win = mainWindow
+      if (!win) return false
+      // El usuario puede estar en Claude: se le trae la ventana para que vea qué se quiere enviar.
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      win.flashFrame(true)
+      win.webContents.send(MCP_APPROVAL_EVENT, request)
+      return true
+    }
+  })
+  void mcp.init()
+
+  registerIpc({ store, vault, updater, runner, mcp, mcpSettings, dataDir, iconPath: icon, window: () => mainWindow })
   const openWindow = () => {
     mainWindow = createWindow(windowState)
     mainWindow.on('closed', () => {
@@ -189,6 +213,7 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openWindow()
   })
+  app.on('before-quit', () => void mcp.stop())
 })
 
 app.on('window-all-closed', () => {

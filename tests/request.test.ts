@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ApiConfig, Endpoint } from '@shared/types'
 import { evaluateResponse, planRequest, SECRET_MASK, type PlanContext } from '@shared/request'
-import { builtinVars, getPath, jsonTemplateError, parseJsonTemplate, setPath, substitute, variableNames } from '@shared/template'
+import { builtinVars, getPath, inlineDefault, inlineFields, jsonTemplateError, parseJsonTemplate, setPath, substitute, variableNames } from '@shared/template'
 import { pathParamNames } from '@shared/url'
 
 describe('plantillas', () => {
@@ -82,6 +82,7 @@ const rpcApi: ApiConfig = {
   variables: [{ name: 'hotel_id', value: '100002', options: [{ label: 'Punta Negra', value: '100001' }, { label: 'Cozy', value: '100002' }] }],
   bodyTemplate: '{"resource": "{{resource}}", "task": "{{task}}", "data": {{body}}}',
   responseRule: { successPath: 'status', successValue: 'success', messagePath: 'message' },
+  folders: [],
   endpoints: []
 }
 
@@ -186,6 +187,35 @@ describe('planRequest', () => {
     const api: ApiConfig = { ...rpcApi, auth: { type: 'basic', username: 'josé' }, bodyTemplate: undefined }
     const plan = planRequest(api, endpoint({ method: 'GET' }), { values: {}, body: '' }, ctx({ password: 'ñ' }))
     expect(plan.headers).toContainEqual({ name: 'Authorization', value: `Basic ${Buffer.from('josé:ñ').toString('base64')}` })
+  })
+})
+
+describe('campos {{tipo.nombre}}', () => {
+  const api: ApiConfig = { ...rpcApi, auth: { type: 'none' }, bodyTemplate: undefined }
+  const ep = endpoint({ path: '/x', body: { kind: 'json' } })
+  const body = '{"start_date": "{{date.start_date}}", "end_date": "{{date.end_date}}", "limit": {{number.limit}}, "all": {{bool.all}}, "note": "{{text.note}}"}'
+
+  it('se detectan en orden y sin repetir', () => {
+    expect(inlineFields(body, '{{date.start_date}} {{hotel_id}}').map((f) => `${f.kind}:${f.name}`)).toEqual([
+      'date:start_date',
+      'date:end_date',
+      'number:limit',
+      'bool:all',
+      'text:note'
+    ])
+    expect(inlineDefault('datetime', new Date(2026, 0, 2, 9, 5))).toBe('2026-01-02 09:05:00')
+  })
+
+  it('sus valores van al cuerpo con su tipo; los vacíos faltan (menos el texto)', () => {
+    const values = { 'inline:date.start_date': '2026-11-01', 'inline:date.end_date': '2026-11-12', 'inline:number.limit': '50', 'inline:bool.all': 'true' }
+    const plan = planRequest(api, ep, { values, body }, ctx())
+    expect(plan.missing).toEqual([])
+    expect(plan.unresolved).toEqual([])
+    expect(JSON.parse(plan.body!)).toEqual({ start_date: '2026-11-01', end_date: '2026-11-12', limit: 50, all: true, note: '' })
+
+    const empty = planRequest(api, ep, { values: {}, body }, ctx())
+    expect(empty.missing).toEqual(['start_date', 'end_date', 'limit', 'all'])
+    expect(empty.unresolved).toEqual([])
   })
 })
 

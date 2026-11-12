@@ -17,7 +17,7 @@ import {
   type SecretStorageStatus,
   type SecretsPatch
 } from '@shared/types'
-import { BUILTIN_HELP, jsonTemplateError } from '@shared/template'
+import { BUILTIN_HELP, INLINE_HELP, jsonTemplateError } from '@shared/template'
 import { AUTH_FIELD_IN_LABEL, AUTH_LABEL, ENV_LABEL, secretLabel } from '../lib/labels'
 import { Icon } from './Icon'
 
@@ -395,6 +395,15 @@ export function ApiDialog({ initial, secretStatus, initialTab = 'general', onClo
                 {BUILTIN_HELP.map(([name, help]) => (
                   <div key={name}>
                     <code>{`{{${name}}}`}</code> <span className="note">{help}</span>
+                  </div>
+                ))}
+              </div>
+              <h3 className="dialog-section">Datos que se piden al llamar</h3>
+              <p className="note">En el cuerpo, la ruta o una cabecera, un hueco con tipo hace que la ficha del endpoint muestre su campo:</p>
+              <div className="builtin-list">
+                {INLINE_HELP.map(([code, help]) => (
+                  <div key={code}>
+                    <code>{code}</code> <span className="note">{help}</span>
                   </div>
                 ))}
               </div>

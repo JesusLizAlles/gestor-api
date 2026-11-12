@@ -1,15 +1,70 @@
 // Prueba de humo de la app completa con Playwright controlando Electron.
 // Requiere `npm run build`. E2E_SCREENSHOTS=/ruta guarda capturas de cada paso.
 // E2E_RENDERER_URL=http://localhost:5173 usa la interfaz de `npm run dev` en vez de la compilada.
+import { spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
+import { createInterface } from 'node:readline'
 import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron, type ElectronApplication, type Page } from 'playwright-core'
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from 'playwright-core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 const env = process.env
+
+function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const server = createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo
+      server.close(() => resolve(port))
+    })
+  })
+}
+
+type McpResult = { content?: { text: string }[]; isError?: boolean } & Record<string, unknown>
+
+/** El puente de Claude Desktop, hablándole por stdin/stdout como lo hace Claude. */
+function startBridge(dataDir: string) {
+  const child = spawn(process.execPath, ['src/mcp-bridge/bridge.cjs'], {
+    env: { PATH: process.env.PATH ?? '', GESTOR_API_DATA_DIR: dataDir },
+    stdio: ['pipe', 'pipe', 'inherit']
+  })
+  const waiting = new Map<number, (result: McpResult) => void>()
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    const reply = JSON.parse(line)
+    waiting.get(reply.id)?.(reply.result)
+    waiting.delete(reply.id)
+  })
+  let nextId = 1
+  const send = (method: string, params: unknown = {}) => {
+    const id = nextId++
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    return new Promise<McpResult>((resolve) => waiting.set(id, resolve))
+  }
+  return {
+    send,
+    tool: (name: string, args: Record<string, unknown>) => send('tools/call', { name, arguments: args }),
+    close: () => child.stdin.end()
+  }
+}
+
+/**
+ * Arrastrar y soltar con eventos HTML5: el dragTo de Playwright mueve el ratón, pero en Electron
+ * no llega a disparar el arrastre nativo. Se suelta en el centro del destino.
+ */
+async function dragAndDrop(source: Locator, target: Locator) {
+  const box = await target.boundingBox()
+  if (!box) throw new Error('El destino no se ve')
+  const at = { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 }
+  const dataTransfer = await source.page().evaluateHandle('new DataTransfer()')
+  await source.dispatchEvent('dragstart', { dataTransfer })
+  await target.dispatchEvent('dragenter', { dataTransfer, ...at })
+  await target.dispatchEvent('dragover', { dataTransfer, ...at })
+  await target.dispatchEvent('drop', { dataTransfer, ...at })
+  await source.dispatchEvent('dragend', { dataTransfer })
+}
 const shots = env.E2E_SCREENSHOTS
 
 describe('Gestor API (E2E)', () => {
@@ -171,5 +226,141 @@ describe('Gestor API (E2E)', () => {
     })
     await page.waitForTimeout(700) // el desplazamiento hasta la respuesta es suave
     await shot('09-respuesta')
+  })
+
+  it('organiza endpoints en carpetas anidadas arrastrándolos', async () => {
+    const apiRow = page.locator('.api-row', { hasText: 'PMS de prueba' })
+    await apiRow.hover()
+    await apiRow.getByTitle('Nueva carpeta').click()
+    await page.getByLabel('Nombre de la carpeta').fill('Recepción')
+    await page.getByLabel('Nombre de la carpeta').press('Enter')
+    const recepcion = page.locator('.folder-row', { hasText: 'Recepción' })
+    await recepcion.waitFor()
+
+    await recepcion.hover()
+    await recepcion.getByTitle('Nueva subcarpeta').click()
+    await page.getByLabel('Nombre de la carpeta').fill('Llegadas')
+    await page.getByLabel('Nombre de la carpeta').press('Enter')
+    const llegadas = page.locator('.folder-row', { hasText: 'Llegadas' }).filter({ hasNotText: 'Recepción' })
+    await llegadas.waitFor()
+
+    await dragAndDrop(page.locator('.endpoint-row', { hasText: 'Llegadas del día' }), llegadas)
+    const view = page.locator('.endpoint-view:not([hidden])')
+    await expect.poll(() => view.locator('.endpoint-folder').textContent(), { timeout: 5000 }).toBe('Recepción / Llegadas')
+    await expect(page.locator('.folder-row', { hasText: 'Recepción' }).locator('.meta').textContent()).resolves.toBe('1')
+    await shot('10-carpetas')
+
+    // Un endpoint nuevo desde la carpeta ya viene con ella elegida.
+    await llegadas.hover()
+    await llegadas.getByTitle('Nuevo endpoint aquí').click()
+    await expect(page.locator('#ep-folder option:checked').textContent()).resolves.toContain('Llegadas')
+    await shot('11-endpoint-en-carpeta')
+    await page.getByRole('button', { name: 'Cancelar' }).click()
+  })
+
+  it('un {{date.x}} en el cuerpo saca un calendario y su valor va en la petición', async () => {
+    await page.locator('.endpoint-row', { hasText: 'Llegadas del día' }).click()
+    const view = page.locator('.endpoint-view:not([hidden])')
+    await view.getByLabel('Cuerpo').fill('{"filters": {"hotel_id": {{hotel_id}}, "date_period": "{{date.desde}}_{{date.hasta}}", "limit": {{number.limite}}}}')
+    const desde = view.locator('input[type="date"]').first()
+    await desde.waitFor()
+    await expect(view.locator('input[type="date"]').count()).resolves.toBe(2)
+    await desde.fill('2026-11-01')
+    // El número empieza vacío: falta rellenarlo y no deja enviar.
+    await expect(view.locator('.request-bar .notice').textContent()).resolves.toContain('Falta rellenar: limite')
+    await view.locator('input[type="number"]').fill('25')
+    // La petición ya quedó a la vista en una prueba anterior de esta misma ficha.
+    if (!(await view.locator('.request-details').isVisible())) await view.getByRole('button', { name: 'Ver la petición' }).click()
+    const today = new Date()
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const sent = await view.locator('.request-details pre').textContent()
+    expect(sent).toContain(`"date_period": "2026-11-01_${iso}"`)
+    expect(sent).toContain('"limit": 25')
+    await shot('12-campos-con-tipo')
+  })
+
+  it('servidor MCP: se activa en Ajustes y un agente consulta y, con aprobación, lanza lo que modifica', async () => {
+    await page.getByTitle('Ajustes (servidor MCP para agentes de IA)').click()
+    const settings = page.getByRole('dialog', { name: 'Ajustes' })
+    await settings.getByText('Parado').waitFor()
+    await settings.getByLabel('Activar el servidor MCP').check()
+    await settings.getByLabel('Puerto').fill(String(await freePort()))
+    await settings.getByLabel('Acceso del agente a PMS de prueba').selectOption('confirm')
+    await settings.getByRole('button', { name: 'Guardar' }).click()
+    await settings.locator('.badge.mcp-on', { hasText: 'En marcha' }).waitFor()
+    await shot('13-mcp-ajustes')
+    await settings.getByRole('button', { name: 'Cerrar' }).click()
+    await page.locator('.statusbar-mcp', { hasText: 'MCP activo' }).waitFor()
+
+    const bridge = startBridge(userData)
+    try {
+      const init = await bridge.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '1' } })
+      expect(init).toMatchObject({ serverInfo: { name: 'gestor-api' } })
+      const list = JSON.parse((await bridge.tool('list_apis', {})).content![0]!.text)
+      expect(list.apis).toMatchObject([{ name: 'PMS de prueba', access: 'confirm', environment: 'prod' }])
+      const endpoints = JSON.parse((await bridge.tool('list_endpoints', { api: 'PMS de prueba' })).content![0]!.text)
+      expect(endpoints.endpoints).toMatchObject([{ name: 'Llegadas del día', folder: 'Recepción / Llegadas', modifies: true }])
+
+      // Modifica datos: espera a que el usuario la apruebe en la app.
+      const before = received.length
+      const call = bridge.tool('call_endpoint', { api: 'PMS de prueba', endpoint: 'Llegadas del día', variables: { hotel_id: 'Hotel Cozy' } })
+      const approval = page.getByRole('alertdialog', { name: 'Aprobar llamada del agente' })
+      await approval.getByText('"hotel_id": "100002"').waitFor()
+      await shot('14-mcp-aprobacion')
+      await approval.getByRole('button', { name: 'Enviar' }).click()
+      const ok = await call
+      expect(ok.isError).toBe(false)
+      expect(JSON.parse(ok.content![0]!.text)).toMatchObject({ success: true, response: { data: { list: [{ guest: 'Ana' }] } } })
+      expect(received).toHaveLength(before + 1)
+
+      const rejected = bridge.tool('call_endpoint', { api: 'PMS de prueba', endpoint: 'Llegadas del día' })
+      await approval.waitFor()
+      await approval.getByRole('button', { name: 'Rechazar' }).click()
+      expect(await rejected).toMatchObject({ isError: true })
+      expect(received).toHaveLength(before + 1)
+    } finally {
+      bridge.close()
+    }
+
+    await page.locator('.statusbar-mcp').click()
+    await settings.locator('.mcp-activity-row', { hasText: 'call_endpoint' }).first().waitFor()
+    expect(await settings.locator('.mcp-activity-row.outcome-rejected').count()).toBe(1)
+    await settings.getByRole('button', { name: 'Cerrar' }).click()
+  })
+
+  it('exporta con clave, y al importar recupera una API borrada con su credencial', async () => {
+    const file = join(userData, 'exportacion.json')
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog
+    }, file)
+
+    await page.getByTitle('Exportar configuración…').click()
+    const exporting = page.getByRole('dialog', { name: 'Exportar configuración' })
+    await exporting.getByLabel('Incluir las credenciales (tokens, claves, contraseñas)').check()
+    await exporting.getByLabel('Clave', { exact: true }).fill('clave-de-prueba')
+    await exporting.getByLabel('Repite la clave').fill('clave-de-prueba')
+    await shot('15-exportar')
+    await exporting.getByRole('button', { name: 'Exportar…' }).click()
+    await page.getByRole('dialog', { name: 'Configuración exportada' }).getByRole('button', { name: 'Cerrar' }).click()
+
+    const row = page.locator('.api-row', { hasText: 'Motor de reservas' })
+    await row.hover()
+    await row.getByTitle('Borrar API').click()
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Borrar' }).click()
+    await row.waitFor({ state: 'detached' })
+
+    await page.getByTitle('Importar configuración…').click()
+    const importing = page.getByRole('dialog', { name: 'Importar configuración' })
+    await importing.locator('.badge', { hasText: 'Sustituye' }).waitFor()
+    await importing.getByLabel('Clave', { exact: true }).fill('clave-de-prueba')
+    await shot('16-importar')
+    await importing.getByRole('button', { name: 'Importar 2' }).click()
+    const done = page.getByRole('dialog', { name: 'Configuración importada' })
+    await expect(done.locator('.notice').textContent()).resolves.toBe('Importado: 1 API nueva y 1 actualizada, con sus credenciales.')
+    await done.getByRole('button', { name: 'Cerrar' }).click()
+
+    await page.locator('.endpoint-row', { hasText: 'Ver reserva' }).click()
+    await expect(page.locator('.endpoint-view:not([hidden]) .auth-line').textContent()).resolves.toContain('credencial guardada')
   })
 })

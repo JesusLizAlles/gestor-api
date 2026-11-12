@@ -10,8 +10,9 @@ import {
   type SecretKey,
   type SendResult
 } from '@shared/types'
-import { planRequest, SECRET_MASK } from '@shared/request'
-import { builtinVars } from '@shared/template'
+import { callInlineFields, defaultValues, planRequest, SECRET_MASK } from '@shared/request'
+import { folderLabel } from '@shared/folders'
+import { builtinVars, INLINE_KIND_LABEL, inlineDefault, inlineValueKey, type InlineField, type Vars } from '@shared/template'
 import { paramKey } from '@shared/url'
 import { AUTH_LABEL, BODY_LABEL, ENV_LABEL, formatBytes, formatDuration, PARAM_IN_HELP, PARAM_IN_LABEL, PARAM_IN_SECTION, PARAM_TYPE_LABEL } from '../lib/labels'
 import { keys } from '../lib/platform'
@@ -32,17 +33,6 @@ interface Props {
 
 const LOCATIONS: ParamLocation[] = ['path', 'query', 'header', 'body']
 
-/** Valores iniciales del formulario: los ejemplos de cada parámetro (o el valor actual de su listado). */
-function initialValues(api: ApiSummary, params: EndpointParam[]): Record<string, string> {
-  return Object.fromEntries(
-    params.map((p) => {
-      const list = p.optionsFrom ? api.variables.find((v) => v.name === p.optionsFrom) : undefined
-      const fallback = list ? list.value : p.type === 'enum' ? (p.options?.[0] ?? '') : ''
-      return [paramKey(p), p.example ?? fallback]
-    })
-  )
-}
-
 /** El cuerpo con sangría si es JSON; tal cual si no. */
 function pretty(text: string | undefined): string {
   if (!text) return ''
@@ -60,7 +50,7 @@ type ResponseTab = 'body' | 'headers' | 'request'
  * se va a enviar y la respuesta.
  */
 export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiChanged }: Props) {
-  const [values, setValues] = useState(() => initialValues(api, endpoint.params))
+  const [values, setValues] = useState(() => defaultValues(api, endpoint))
   const [body, setBody] = useState(endpoint.body.example ?? '')
   const [showRequest, setShowRequest] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -82,7 +72,12 @@ export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiCh
     () => Object.fromEntries(api.storedSecrets.map((k) => [k, SECRET_MASK])) as Partial<Record<SecretKey, string>>,
     [api.storedSecrets]
   )
-  const plan = planRequest(api, endpoint, { values, body }, { builtins, secrets: masked, oauthToken: SECRET_MASK })
+  // Campos {{tipo.nombre}} del cuerpo, la ruta…: los que no se han tocado empiezan con su valor por defecto (hoy, ahora…).
+  const openedAt = useMemo(() => new Date(), [])
+  const inline = callInlineFields(api, endpoint, { values, body })
+  const filled = { ...values }
+  for (const f of inline) filled[inlineValueKey(f.key)] ??= inlineDefault(f.kind, openedAt)
+  const plan = planRequest(api, endpoint, { values: filled, body }, { builtins, secrets: masked, oauthToken: SECRET_MASK })
   const missingSecrets = authSecrets(api.auth).filter((k) => !api.storedSecrets.includes(k))
   const problems = [
     ...plan.errors,
@@ -104,7 +99,7 @@ export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiCh
     const id = crypto.randomUUID()
     setRunId(id)
     try {
-      setResult(await window.api.sendRequest({ runId: id, apiId: api.id, endpointId: endpoint.id, values, body }))
+      setResult(await window.api.sendRequest({ runId: id, apiId: api.id, endpointId: endpoint.id, values: filled, body }))
     } catch (err) {
       const message = (err as Error).message
       const request: RequestEcho = { method: plan.method, url: plan.url, headers: plan.headers, body: plan.body }
@@ -143,6 +138,7 @@ export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiCh
       <div className="endpoint-head">
         <MethodBadge method={endpoint.method} large />
         <div className="endpoint-title">
+          {endpoint.folderId && <div className="endpoint-folder">{folderLabel(api.folders, endpoint.folderId)}</div>}
           <h1>
             {endpoint.name}
             {endpoint.modifies && (
@@ -220,6 +216,26 @@ export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiCh
           </section>
         )}
 
+        {inline.length > 0 && (
+          <section>
+            <h3 title="Huecos {{tipo.nombre}} del cuerpo, la ruta o las cabeceras">
+              Campos <span className="dim">· los {'{{huecos}}'} con tipo de la llamada</span>
+            </h3>
+            <div className="param-form">
+              {inline.map((f) => (
+                <InlineInput
+                  key={f.key}
+                  id={`inline-${endpoint.id}-${f.key}`}
+                  field={f}
+                  builtins={builtins}
+                  value={filled[inlineValueKey(f.key)] ?? ''}
+                  onChange={(v) => setValues((old) => ({ ...old, [inlineValueKey(f.key)]: v }))}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
         {LOCATIONS.map((location) => {
           const list = endpoint.params.filter((p) => p.in === location)
           if (list.length === 0) return null
@@ -292,7 +308,7 @@ export function EndpointView({ api, endpoint, active, onEdit, onEditApi, onApiCh
             <button onClick={() => void navigator.clipboard.writeText(plan.url)}>Copiar URL</button>
             <button
               onClick={() => {
-                setValues(initialValues(api, endpoint.params))
+                setValues(defaultValues(api, endpoint))
                 setBody(endpoint.body.example ?? '')
               }}
             >
@@ -524,6 +540,62 @@ function ParamField({
       </label>
       {input}
       {param.description && <div className="note">{param.description}</div>}
+    </div>
+  )
+}
+
+/** Campo de un hueco {{tipo.nombre}}: calendario, hora, número, sí/no o texto. */
+function InlineInput({ id, field, builtins, value, onChange }: { id: string; field: InlineField; builtins: Vars; value: string; onChange: (v: string) => void }) {
+  let input: React.ReactNode
+  // Con una {{variable}} dentro, texto: un calendario no la admitiría.
+  if (value.includes('{{') || field.kind === 'text') {
+    input = <input id={id} type="text" value={value} onChange={(e) => onChange(e.target.value)} />
+  } else if (field.kind === 'bool') {
+    input = (
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="true">Sí</option>
+        <option value="false">No</option>
+      </select>
+    )
+  } else if (field.kind === 'datetime') {
+    // El selector usa 2026-11-12T09:30; las APIs suelen querer 2026-11-12 09:30:00.
+    input = (
+      <input
+        id={id}
+        type="datetime-local"
+        step={1}
+        value={value.replace(' ', 'T')}
+        onChange={(e) => onChange(e.target.value ? `${e.target.value.replace('T', ' ')}${e.target.value.length === 16 ? ':00' : ''}` : '')}
+      />
+    )
+  } else {
+    input = <input id={id} type={field.kind} value={value} onChange={(e) => onChange(e.target.value)} />
+  }
+  return (
+    <div className="param-field">
+      <label htmlFor={id}>
+        <span className="mono">{field.name}</span>
+        <span className="param-type">{INLINE_KIND_LABEL[field.kind]}</span>
+      </label>
+      {field.kind === 'date' ? (
+        <div className="row">
+          {input}
+          {(
+            [
+              ['Ayer', '$ayer'],
+              ['Hoy', '$hoy'],
+              ['Mañana', '$manana']
+            ] as const
+          ).map(([label, name]) => (
+            <button key={name} type="button" className="compact" onClick={() => onChange(builtins[name]!)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        input
+      )}
+      <div className="note mono">{`{{${field.key}}}`}</div>
     </div>
   )
 }

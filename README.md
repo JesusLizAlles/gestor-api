@@ -28,7 +28,10 @@ clásica o del estilo «una sola URL, todo por POST JSON».
 - **Regla de respuesta** para las APIs que responden siempre 200: qué campo dice si fue bien (`status = success`) y de
   dónde sale el mensaje.
 - **Cabeceras comunes**, tiempo de espera y método/ruta por defecto de los endpoints nuevos.
-- **Endpoints** con método, ruta, grupo (carpeta en el panel lateral) y una explicación de qué hacen.
+- **Carpetas anidadas** de endpoints dentro de cada API: se crean y renombran en el propio panel (doble clic), y
+  carpetas y endpoints se ordenan y cambian de carpeta arrastrándolos. Al borrar una carpeta, lo que tenía dentro sube
+  un nivel. Clic derecho en una API, carpeta o endpoint para ver sus acciones.
+- **Endpoints** con método, ruta, carpeta y una explicación de qué hacen.
   - **Datos que pide**: nombre, dónde va (ruta, consulta, cabecera o **cuerpo**, con puntos para anidar:
     `filters.hotel_id`), tipo (texto, número, sí/no, fecha o lista de valores), si es obligatorio, un ejemplo y qué
     significa.
@@ -36,21 +39,37 @@ clásica o del estilo «una sola URL, todo por POST JSON».
   - **Cuerpo**: JSON o formulario, con un ejemplo.
   - **Valores fijos** (`resource = booking`, `task = get`…) que rellenan la plantilla de cuerpo.
   - **Modifica datos**: pide confirmación antes de enviar; en producción, reforzada y enseñando lo que sale.
+- **Campos con tipo** escritos como hueco en el cuerpo, la ruta o una cabecera: `{{date.desde}}` saca un calendario
+  (con Ayer/Hoy/Mañana), y también hay `datetime.`, `time.`, `number.`, `bool.` y `text.`. Entre comillas viajan como
+  texto; sin comillas, como número o sí/no.
 - **Ficha del endpoint**: su explicación, los listados de la API, un campo por cada dato, el cuerpo editable y la
   petición montada mientras se escribe (con los secretos tapados), con aviso de lo que falta.
 - **Envío** (<kbd>Ctrl</kbd>+<kbd>Enter</kbd>) y cancelación. La respuesta muestra código, si fue bien según la regla,
   tiempo, tamaño, cuerpo en árbol plegable o como texto, cabeceras y la petición tal como salió.
+- **Exportar e importar la configuración** (iconos junto a «APIs»): las APIs elegidas con sus carpetas, endpoints y
+  variables en un fichero JSON para montarlo rápido en otro equipo. Las credenciales, si se incluyen, van cifradas con
+  una clave que eliges (scrypt + AES-256-GCM) y se piden al importar. Reimportar sustituye en vez de duplicar.
+- **Servidor MCP para agentes de IA** (engranaje junto a «APIs»): Claude Desktop, Claude Code u otro cliente MCP buscan
+  y lanzan los endpoints por su cuenta con las credenciales guardadas, que nunca ven. Herramientas: `list_apis`,
+  `list_endpoints`, `describe_endpoint` y `call_endpoint` (con parámetros y campos por nombre, cuerpo propio y
+  variables solo para esa llamada, p. ej. otro hotel).
+  - Acceso por API: sin acceso (por defecto), solo consultas (los endpoints «modifica datos» se bloquean), cambios con
+    aprobación o cambios sin preguntar. En producción los cambios siempre piden aprobación: la app enseña la petición
+    (con los secretos tapados) y no la envía hasta pulsar «Enviar» (se rechaza sola a los 5 minutos).
+  - Streamable HTTP solo en 127.0.0.1, token aleatorio y comprobación de Host/Origin. Actividad en Ajustes y en
+    `logs/mcp.log`.
+  - La app genera la extensión `.mcpb` de Claude Desktop: un puente stdio ↔ HTTP sin dependencias que lee puerto y
+    token de `mcp.json` y, con la app cerrada, explica qué hacer en vez de fallar.
 - Panel lateral con buscador de endpoints, pestañas (<kbd>Ctrl</kbd>+<kbd>W</kbd> cierra,
   <kbd>Ctrl</kbd>+<kbd>Tab</kbd> cambia) y actualizaciones automáticas.
 
 ## Próximos pasos
 
-1. Carpetas anidadas de endpoints por temática dentro de cada API, con arrastrar y soltar.
-2. Endpoints de tipo **script**: JavaScript con editor de código, ejecutado aislado (sin Node ni disco) y con acceso
+1. Endpoints de tipo **script**: JavaScript con editor de código, ejecutado aislado (sin Node ni disco) y con acceso
    solo a `request()`, las variables y los datos del formulario. Para paginar, encadenar llamadas o transformar la
    respuesta.
-3. Importar y exportar APIs en JSON (y después OpenAPI/Swagger y Postman).
-4. Historial de llamadas.
+2. Importar desde OpenAPI/Swagger y Postman.
+3. Historial de llamadas.
 
 ## Puesta en marcha
 
@@ -105,7 +124,7 @@ encuentren las versiones, el repositorio tiene que ser público.
 
 | Carpeta | Contenido |
 | --- | --- |
-| `src/shared` | Tipos, canales IPC y montaje de URLs (`url.ts`). Lo usan los dos procesos. |
+| `src/shared` | Tipos, canales IPC, montaje de URLs y peticiones, plantillas y árbol de carpetas (`folders.ts`). Lo usan los dos procesos. |
 | `src/main` | Proceso principal: almacenamiento, validación, IPC y actualizador. |
 | `src/preload` | Puente mínimo que expone `window.api` al renderer. |
 | `src/renderer` | Interfaz React. |

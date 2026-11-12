@@ -44,6 +44,64 @@ export const BUILTIN_HELP: [string, string][] = [
   ['$uuid', 'identificador único nuevo']
 ]
 
+/** Tipos de campo que se pueden pedir desde el propio cuerpo, la ruta o una cabecera: {{date.desde}}. */
+export type InlineKind = 'date' | 'datetime' | 'time' | 'number' | 'text' | 'bool'
+
+export const INLINE_KIND_LABEL: Record<InlineKind, string> = {
+  date: 'Fecha',
+  datetime: 'Fecha y hora',
+  time: 'Hora',
+  number: 'Número',
+  text: 'Texto',
+  bool: 'Sí/No'
+}
+
+export const INLINE_HELP: [string, string][] = [
+  ['{{date.desde}}', 'calendario (2026-11-12)'],
+  ['{{datetime.desde}}', 'fecha y hora (2026-11-12 09:30:00)'],
+  ['{{time.hora}}', 'hora (09:30)'],
+  ['{{number.limite}}', 'número'],
+  ['{{bool.activo}}', 'sí/no (true/false)'],
+  ['{{text.nota}}', 'texto libre (puede quedar vacío)']
+]
+
+/** Un {{tipo.nombre}}: la ficha del endpoint pinta un campo de ese tipo y su valor sustituye al hueco. */
+export interface InlineField {
+  /** date.desde */
+  key: string
+  kind: InlineKind
+  /** desde */
+  name: string
+}
+
+const INLINE = /^(date|datetime|time|number|text|bool)\.([A-Za-z_][\w-]*)$/
+
+/** Campos {{tipo.nombre}} de unos textos, en el orden en que aparecen y sin repetir. */
+export function inlineFields(...texts: (string | undefined)[]): InlineField[] {
+  const out = new Map<string, InlineField>()
+  for (const text of texts) {
+    if (!text) continue
+    for (const key of variableNames(text)) {
+      const m = INLINE.exec(key)
+      if (m && !out.has(key)) out.set(key, { key, kind: m[1] as InlineKind, name: m[2]! })
+    }
+  }
+  return [...out.values()]
+}
+
+/** Dónde va el valor de un campo en los valores del formulario. */
+export const inlineValueKey = (key: string) => `inline:${key}`
+
+/** Valor con el que empieza un campo: hoy, ahora, No… */
+export function inlineDefault(kind: InlineKind, now = new Date()): string {
+  const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`
+  if (kind === 'date') return isoDate(now)
+  if (kind === 'datetime') return `${isoDate(now)} ${time}:00`
+  if (kind === 'time') return time
+  if (kind === 'bool') return 'false'
+  return ''
+}
+
 /** Marca interna de un {{hueco}} escrito sin comillas en una plantilla JSON. */
 const RAW = '\u0000raw:'
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { type ApiConfig, type HttpResponse, type SecretKey, type SendRequestInput, type SendResult } from '@shared/types'
-import { evaluateResponse, planRequest, SECRET_MASK, type PlanContext } from '@shared/request'
+import { evaluateResponse, planRequest, SECRET_MASK, withVariables, type PlanContext } from '@shared/request'
 import { builtinVars } from '@shared/template'
 import type { ApiStore } from './store/apis'
 import type { SecretVault } from './store/secrets'
@@ -33,7 +33,7 @@ export class RequestRunner {
   constructor(private readonly deps: { store: ApiStore; vault: SecretVault; fetch: FetchFn; now?: () => number }) {}
 
   async send(input: SendRequestInput): Promise<SendResult> {
-    const api = await this.deps.store.get(input.apiId)
+    const api = withVariables(await this.deps.store.get(input.apiId), input.variables)
     const endpoint = api.endpoints.find((e) => e.id === input.endpointId)
     if (!endpoint) throw new Error('El endpoint no existe')
 

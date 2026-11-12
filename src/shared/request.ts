@@ -13,7 +13,7 @@ import {
   type ResponseRule,
   type SecretKey
 } from './types'
-import { getPath, parseJsonTemplate, setPath, substitute, type Vars } from './template'
+import { getPath, inlineFields, inlineValueKey, parseJsonTemplate, setPath, substitute, type InlineField, type Vars } from './template'
 import { buildUrl, paramKey } from './url'
 
 export interface PlanContext {
@@ -47,10 +47,56 @@ export interface RequestPlan {
 
 export const SECRET_MASK = '••••••'
 
-/** Variables de una llamada: las automáticas, las de la conexión y los valores fijos del endpoint. */
-export function requestVars(api: ApiConfig, endpoint: Endpoint, builtins: Vars): Vars {
+/** Valores con los que empieza el formulario de un endpoint: el ejemplo de cada parámetro (o el valor actual de su listado). */
+export function defaultValues(api: ApiConfig, endpoint: Endpoint): Record<string, string> {
+  return Object.fromEntries(
+    endpoint.params.map((p) => {
+      const list = p.optionsFrom ? api.variables.find((v) => v.name === p.optionsFrom) : undefined
+      const fallback = list ? list.value : p.type === 'enum' ? (p.options?.[0] ?? '') : ''
+      return [paramKey(p), p.example ?? fallback]
+    })
+  )
+}
+
+/**
+ * La API con otros valores en sus variables, solo para una llamada (sin cambiar lo elegido en la app).
+ * En un listado vale tanto el valor como el nombre de la opción («Hotel Norte»).
+ */
+export function withVariables<T extends ApiConfig>(api: T, overrides: Record<string, string> | undefined): T {
+  if (!overrides || Object.keys(overrides).length === 0) return api
+  const unknown = Object.keys(overrides).filter((name) => !api.variables.some((v) => v.name === name))
+  if (unknown.length) {
+    throw new Error(`Variables que no existen en ${api.name}: ${unknown.join(', ')}. Hay: ${api.variables.map((v) => v.name).join(', ') || 'ninguna'}`)
+  }
+  return {
+    ...api,
+    variables: api.variables.map((v) => {
+      if (!Object.hasOwn(overrides, v.name)) return v
+      const wanted = overrides[v.name]!
+      const option = v.options?.find((o) => o.value === wanted) ?? v.options?.find((o) => o.label.trim().toLowerCase() === wanted.trim().toLowerCase())
+      return { ...v, value: option ? option.value : wanted }
+    })
+  }
+}
+
+/** Campos {{tipo.nombre}} que pide una llamada: en el cuerpo, la ruta, las cabeceras, los valores fijos o la plantilla. */
+export function callInlineFields(api: ApiConfig, endpoint: Endpoint, input: PlanInput): InlineField[] {
+  return inlineFields(
+    input.body,
+    api.baseUrl,
+    endpoint.path,
+    api.bodyTemplate,
+    ...api.headers.map((h) => h.value),
+    ...endpoint.vars.map((v) => v.value),
+    ...endpoint.params.map((p) => input.values[paramKey(p)])
+  )
+}
+
+/** Variables de una llamada: las automáticas, las de la conexión, los campos {{tipo.nombre}} y los valores fijos del endpoint. */
+export function requestVars(api: ApiConfig, endpoint: Endpoint, builtins: Vars, fields: Vars = {}): Vars {
   const vars: Vars = { ...builtins }
   for (const v of api.variables) vars[v.name] = v.value
+  Object.assign(vars, fields)
   for (const v of endpoint.vars) vars[v.name] = substitute(v.value, vars)
   return vars
 }
@@ -73,10 +119,18 @@ function base64Utf8(text: string): string {
 const secretName = (key: SecretKey) => (key.startsWith('field:') ? key.slice('field:'.length) : key)
 
 export function planRequest(api: ApiConfig, endpoint: Endpoint, input: PlanInput, ctx: PlanContext): RequestPlan {
-  const vars = requestVars(api, endpoint, ctx.builtins)
+  const missing: string[] = []
+  // Campos {{tipo.nombre}}: con valor pasan a ser variables; vacíos, faltan (salvo el texto, que puede ir vacío).
+  const fields: Vars = {}
+  const inline = callInlineFields(api, endpoint, input)
+  for (const f of inline) {
+    const value = input.values[inlineValueKey(f.key)] ?? ''
+    if (value !== '' || f.kind === 'text') fields[f.key] = value
+    else missing.push(f.name)
+  }
+  const vars = requestVars(api, endpoint, ctx.builtins, fields)
   const unresolved = new Set<string>()
   const errors: string[] = []
-  const missing: string[] = []
   const method = endpoint.method
 
   // Valores del formulario con sus {{variables}} ya sustituidas.
@@ -190,6 +244,8 @@ export function planRequest(api: ApiConfig, endpoint: Endpoint, input: PlanInput
   }
   if (!/^https?:\/\//i.test(url)) errors.push('La dirección tiene que empezar por http:// o https://')
 
+  // Un campo vacío ya sale en «falta rellenar»: no se repite como variable sin definir.
+  for (const f of inline) unresolved.delete(f.key)
   return { method, url, headers, body, missing: [...new Set(missing)], unresolved: [...unresolved], errors }
 }
 

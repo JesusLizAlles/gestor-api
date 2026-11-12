@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ApiSummary, Endpoint, SecretStorageStatus } from '@shared/types'
+import type { ApiSummary, Endpoint, Folder, McpApprovalRequest, McpState, SecretStorageStatus } from '@shared/types'
+import { countEndpoints, folderLabel } from '@shared/folders'
 import { ApiDialog, type DialogTab } from './components/ApiDialog'
+import { ApiTree } from './components/ApiTree'
+import { ExportDialog, ImportDialog } from './components/ConfigTransfer'
+import { Icon } from './components/Icon'
+import { McpApprovalDialog } from './components/McpApprovalDialog'
+import { SettingsDialog } from './components/SettingsDialog'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { EndpointDialog } from './components/EndpointDialog'
 import { EndpointView } from './components/EndpointView'
-import { Icon } from './components/Icon'
 import { MethodBadge } from './components/MethodBadge'
 import { UpdateControls } from './components/UpdateControls'
-import { AUTH_BADGE, AUTH_LABEL, ENV_LABEL } from './lib/labels'
+import { AUTH_LABEL, ENV_LABEL } from './lib/labels'
 import { keys } from './lib/platform'
 
 /** Una pestaña por endpoint abierto. */
@@ -18,7 +23,10 @@ interface Tab {
 
 const tabId = (t: Tab) => `${t.apiId}/${t.endpointId}`
 
-type Deleting = { kind: 'api'; api: ApiSummary } | { kind: 'endpoint'; api: ApiSummary; endpoint: Endpoint }
+type Deleting =
+  | { kind: 'api'; api: ApiSummary }
+  | { kind: 'endpoint'; api: ApiSummary; endpoint: Endpoint }
+  | { kind: 'folder'; api: ApiSummary; folder: Folder }
 
 const SIDEBAR_WIDTH = { default: 300, min: 180, max: 700 }
 
@@ -31,19 +39,6 @@ function readSidebarWidth(): number {
   }
 }
 
-/** Endpoints agrupados por su carpeta, en el orden en que se crearon; los sueltos van primero. */
-function groupEndpoints(endpoints: Endpoint[]): [string | null, Endpoint[]][] {
-  const groups = new Map<string | null, Endpoint[]>([[null, []]])
-  for (const e of endpoints) {
-    const key = e.group?.trim() || null
-    groups.set(key, [...(groups.get(key) ?? []), e])
-  }
-  return [...groups].filter(([, list]) => list.length > 0)
-}
-
-const matches = (e: Endpoint, filter: string) =>
-  !filter || `${e.name} ${e.path} ${e.method} ${e.group ?? ''}`.toLowerCase().includes(filter.toLowerCase())
-
 export function App() {
   const [apis, setApis] = useState<ApiSummary[]>([])
   const [secretStatus, setSecretStatus] = useState<SecretStorageStatus | null>(null)
@@ -53,9 +48,33 @@ export function App() {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [editingApi, setEditingApi] = useState<{ api: ApiSummary | null; tab?: DialogTab } | null>(null)
-  const [editingEndpoint, setEditingEndpoint] = useState<{ api: ApiSummary; endpoint: Endpoint | null } | null>(null)
+  const [editingEndpoint, setEditingEndpoint] = useState<{ api: ApiSummary; endpoint: Endpoint | null; folderId?: string } | null>(null)
   const [deleting, setDeleting] = useState<Deleting | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [transfer, setTransfer] = useState<'export' | 'import' | null>(null)
+  /** Llamadas del agente que modifican datos esperando aprobación, en orden de llegada. */
+  const [approvals, setApprovals] = useState<McpApprovalRequest[]>([])
+  const [mcp, setMcp] = useState<McpState | null>(null)
+
+  useEffect(() => {
+    void window.api.mcpState().then(setMcp)
+    const offState = window.api.onMcpState((state) => {
+      setMcp(state)
+      // Las que caducaron en el proceso principal ya no se pueden aprobar.
+      setApprovals((list) => list.filter((a) => state.pendingApprovals.includes(a.id)))
+    })
+    const offApproval = window.api.onMcpApproval((request) => setApprovals((list) => [...list, request]))
+    return () => {
+      offState()
+      offApproval()
+    }
+  }, [])
+
+  const answerApproval = (request: McpApprovalRequest, approved: boolean) => {
+    setApprovals((list) => list.filter((a) => a.id !== request.id))
+    void window.api.mcpRespondApproval(request.id, approved)
+  }
 
   const started = useRef(false)
   useEffect(() => {
@@ -86,6 +105,12 @@ export function App() {
     setActiveTabId(neighbour ? tabId(neighbour) : null)
   }
   const closeTab = (id: string) => closeTabs((t) => tabId(t) === id)
+
+  /** Una carpeta vacía se borra sin preguntar: no se pierde nada. */
+  const deleteFolder = (api: ApiSummary, folder: Folder) => {
+    if (api.folders.some((f) => f.parentId === folder.id) || countEndpoints(api, folder.id) > 0) setDeleting({ kind: 'folder', api, folder })
+    else void window.api.deleteFolder(api.id, folder.id).then(replaceApi)
+  }
 
   const toggleApi = (id: string) =>
     setCollapsed((set) => {
@@ -160,6 +185,15 @@ export function App() {
         <div className="section-title">
           APIs
           <span className="section-actions">
+            <button className="icon" title="Ajustes (servidor MCP para agentes de IA)" onClick={() => setSettingsOpen(true)}>
+              <Icon name="settings" />
+            </button>
+            <button className="icon" title="Importar configuración…" onClick={() => setTransfer('import')}>
+              <Icon name="import" />
+            </button>
+            <button className="icon" title="Exportar configuración…" disabled={apis.length === 0} onClick={() => setTransfer('export')}>
+              <Icon name="export" />
+            </button>
             <button className="icon" title="Nueva API" onClick={() => setEditingApi({ api: null })}>
               ＋
             </button>
@@ -172,74 +206,24 @@ export function App() {
         )}
         <div className="api-list">
           {apis.length === 0 && <div className="empty-note">Aún no hay APIs. Pulsa ＋ para añadir la primera.</div>}
-          {apis.map((api) => {
-            const visible = api.endpoints.filter((e) => matches(e, filter))
-            if (filter && visible.length === 0) return null
-            const expanded = !collapsed.has(api.id) || filter !== ''
-            const badge = AUTH_BADGE[api.auth.type]
-            return (
-              <div key={api.id}>
-                <div className="api-row" title={`${api.baseUrl}\n${AUTH_LABEL[api.auth.type]}`} onClick={() => toggleApi(api.id)}>
-                  <span className="twisty">{expanded ? '▾' : '▸'}</span>
-                  <span className={`env-dot env-${api.environment}`} />
-                  <span className="name">{api.name}</span>
-                  {badge && <span className="badge">{badge}</span>}
-                  <span className="badge">{api.endpoints.length}</span>
-                  <span className="actions" onClick={(e) => e.stopPropagation()}>
-                    <button className="icon" title="Nuevo endpoint" onClick={() => setEditingEndpoint({ api, endpoint: null })}>
-                      <Icon name="plus" />
-                    </button>
-                    <button className="icon" title="Editar API" onClick={() => setEditingApi({ api })}>
-                      <Icon name="edit" />
-                    </button>
-                    <button className="icon" title="Borrar API" onClick={() => setDeleting({ kind: 'api', api })}>
-                      <Icon name="trash" />
-                    </button>
-                  </span>
-                </div>
-                {expanded && (
-                  <div className="endpoint-tree">
-                    {api.endpoints.length === 0 && (
-                      <button className="link tree-empty" onClick={() => setEditingEndpoint({ api, endpoint: null })}>
-                        + Añadir el primer endpoint
-                      </button>
-                    )}
-                    {groupEndpoints(visible).map(([group, list]) => (
-                      <div key={group ?? ''}>
-                        {group && (
-                          <div className="tree-row group-row">
-                            <Icon name="folder" />
-                            <span className="label">{group}</span>
-                          </div>
-                        )}
-                        {list.map((e) => (
-                          <div
-                            key={e.id}
-                            className={`tree-row endpoint-row ${group ? 'nested' : ''} ${
-                              activeTab?.apiId === api.id && activeTab.endpointId === e.id ? 'active' : ''
-                            }`}
-                            title={`${e.method} ${e.path}${e.description ? `\n${e.description}` : ''}`}
-                            onClick={() => openEndpoint(api.id, e.id)}
-                          >
-                            <MethodBadge method={e.method} />
-                            <span className="label">{e.name}</span>
-                            <span className="row-actions" onClick={(ev) => ev.stopPropagation()}>
-                              <button className="icon" title="Editar endpoint" onClick={() => setEditingEndpoint({ api, endpoint: e })}>
-                                <Icon name="edit" />
-                              </button>
-                              <button className="icon" title="Borrar endpoint" onClick={() => setDeleting({ kind: 'endpoint', api, endpoint: e })}>
-                                <Icon name="trash" />
-                              </button>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {apis.map((api) => (
+            <ApiTree
+              key={api.id}
+              api={api}
+              filter={filter}
+              expanded={!collapsed.has(api.id)}
+              onToggle={() => toggleApi(api.id)}
+              activeEndpointId={activeTab?.apiId === api.id ? activeTab.endpointId : null}
+              onOpen={(endpointId) => openEndpoint(api.id, endpointId)}
+              onNewEndpoint={(folderId) => setEditingEndpoint({ api, endpoint: null, folderId })}
+              onEditEndpoint={(endpoint) => setEditingEndpoint({ api, endpoint })}
+              onDeleteEndpoint={(endpoint) => setDeleting({ kind: 'endpoint', api, endpoint })}
+              onEditApi={() => setEditingApi({ api })}
+              onDeleteApi={() => setDeleting({ kind: 'api', api })}
+              onDeleteFolder={(folder) => deleteFolder(api, folder)}
+              onApiChanged={replaceApi}
+            />
+          ))}
         </div>
       </aside>
 
@@ -337,9 +321,37 @@ export function App() {
           </span>
         )}
         <span className="spacer" />
+        {mcp?.running && (
+          <button
+            className="statusbar-mcp"
+            title={`Servidor MCP en ${mcp.url}. Clic para ver los ajustes y la actividad del agente`}
+            onClick={() => setSettingsOpen(true)}
+          >
+            MCP activo
+          </button>
+        )}
+        {mcp?.error && (
+          <button className="statusbar-mcp error" title={mcp.error} onClick={() => setSettingsOpen(true)}>
+            MCP: error
+          </button>
+        )}
         <span className="note">{keys('Clic: abrir endpoint · Ctrl+W: cerrar pestaña · Ctrl+Tab: cambiar de pestaña')}</span>
         <UpdateControls />
       </footer>
+
+      {settingsOpen && <SettingsDialog apis={apis} onClose={() => setSettingsOpen(false)} />}
+      {approvals[0] && (
+        <McpApprovalDialog
+          key={approvals[0].id}
+          request={approvals[0]}
+          pending={approvals.length - 1}
+          onAnswer={(approved) => answerApproval(approvals[0]!, approved)}
+        />
+      )}
+      {transfer === 'export' && <ExportDialog apis={apis} onClose={() => setTransfer(null)} />}
+      {transfer === 'import' && (
+        <ImportDialog onClose={() => setTransfer(null)} onImported={() => void window.api.listApis().then(setApis)} />
+      )}
 
       {editingApi && (
         <ApiDialog
@@ -358,6 +370,7 @@ export function App() {
         <EndpointDialog
           api={editingEndpoint.api}
           initial={editingEndpoint.endpoint}
+          folderId={editingEndpoint.folderId}
           onClose={() => setEditingEndpoint(null)}
           onSaved={(saved, endpointId) => {
             setEditingEndpoint(null)
@@ -374,7 +387,7 @@ export function App() {
 
       {deleting && (
         <ConfirmDialog
-          title={deleting.kind === 'api' ? 'Borrar API' : 'Borrar endpoint'}
+          title={deleting.kind === 'api' ? 'Borrar API' : deleting.kind === 'folder' ? 'Borrar carpeta' : 'Borrar endpoint'}
           confirmLabel="Borrar"
           danger
           onCancel={() => setDeleting(null)}
@@ -385,6 +398,8 @@ export function App() {
               await window.api.deleteApi(target.api.id)
               closeTabs((t) => t.apiId === target.api.id)
               setApis((list) => list.filter((a) => a.id !== target.api.id))
+            } else if (target.kind === 'folder') {
+              replaceApi(await window.api.deleteFolder(target.api.id, target.folder.id))
             } else {
               replaceApi(await window.api.deleteEndpoint(target.api.id, target.endpoint.id))
               closeTabs((t) => t.apiId === target.api.id && t.endpointId === target.endpoint.id)
@@ -395,6 +410,12 @@ export function App() {
             <p>
               Se borrará «{deleting.api.name}», sus {deleting.api.endpoints.length} endpoints y sus credenciales guardadas. Esta
               acción no se puede deshacer.
+            </p>
+          ) : deleting.kind === 'folder' ? (
+            <p>
+              Se borrará la carpeta «{deleting.folder.name}». Lo que tiene dentro ({countEndpoints(deleting.api, deleting.folder.id)}{' '}
+              endpoints y sus subcarpetas) no se borra: pasa a{' '}
+              {deleting.folder.parentId ? `«${folderLabel(deleting.api.folders, deleting.folder.parentId)}»` : `la raíz de ${deleting.api.name}`}.
             </p>
           ) : (
             <p>
